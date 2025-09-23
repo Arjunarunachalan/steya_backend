@@ -1,100 +1,96 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const roomSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true, // To track who posted it
-  },
+  // Category
   category: {
     type: String,
-    enum: ['shared', 'pg_hostel', 'flat_home'],
+    enum: ["shared", "pg_hostel", "flat_home"],
     required: true,
   },
-  title: String,
-  description: String,
-  images: [String], // URLs (Cloudinary etc.)
 
-  // 📍 Structured Location
+  // Common fields
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  images: [String],
+
+  // Location (GeoJSON Point)
   location: {
+    type: {
+      type: String,
+      enum: ["Point"],
+      default: "Point",
+    },
+    coordinates: {
+      type: [Number], // [lng, lat]
+      required: true,
+    },
     fullAddress: String,
-    district: String,
-    state: String,
-    latitude: Number,
-    longitude: Number,
   },
+  district: { type: String, required: true },
+  state: { type: String, required: true },
 
-  // 📞 Contact
+  // Contact
   contactPhone: String,
-  showPhonePublic: {
-    type: Boolean,
-    default: false,
-  },
+  showPhonePublic: { type: Boolean, default: false },
 
-  // 📦 Shared Room Specific
+  // Financial / category-specific
   monthlyRent: Number,
-  roommatesWanted: Number,
-  genderPreference: {
-    type: String,
-    enum: ['male', 'female', 'any'],
-  },
-  habitPreferences: [String], // ['non_smoker', 'non_alcoholic', 'fitness_freak']
-  purpose: [String], // ['student', 'professional', 'living']
-
-  // 🛏 PG/Hostel Specific
   priceRange: {
     min: Number,
     max: Number,
   },
-  pgGenderCategory: {
-    type: String,
-    enum: ['gents', 'ladies', 'any'],
-  },
-  roomTypesAvailable: [String], // ['single', 'double', 'triple']
-  mealsProvided: [String], // ['breakfast', 'lunch', 'dinner']
-  amenities: [String], // ['wifi', 'ac', 'hot_water', 'laundry']
-  rules: [String], // ['non_smoking', 'non_alcoholic', ...custom rules]
-
-  // 🏡 Flat/Home Specific
-  propertyType: {
-    type: String,
-    enum: ['flat', 'home', 'apartment'],
-  },
-  furnishedStatus: {
-    type: String,
-    enum: ['furnished', 'semi-furnished', 'unfurnished'],
-  },
   securityDeposit: Number,
+
+  // Shared Room specific
+  roommatesWanted: Number,
+  genderPreference: { type: String, enum: ["male", "female", "any"] },
+  habitPreferences: [String],
+  purpose: [String],
+
+  // PG/Hostel specific
+  availableSpace: Number,
+  pgGenderCategory: { type: String, enum: ["gents", "ladies", "any"] },
+  roomTypesAvailable: [String],
+  mealsProvided: [String],
+  amenities: [String],
+  rules: [String],
+
+  // Flat/Home specific
+  propertyType: String,
+  furnishedStatus: { type: String, enum: ["furnished", "semi", "unfurnished"] },
   squareFeet: Number,
   bedrooms: Number,
   bathrooms: Number,
   balconies: Number,
   floorNumber: Number,
   totalFloors: Number,
-  tenantPreference: {
-    type: String,
-    enum: ['family', 'bachelors', 'any'],
-  },
-  parking: {
-    type: String,
-    enum: ['two_wheeler', 'four_wheeler', 'none'],
-  },
+  tenantPreference: String,
+  parking: String,
 
-  // 🔒 Status & Time
-  status: {
-    type: String,
-    enum: ['active', 'inactive', 'sold', 'deleted'],
-    default: 'active',
-  },
-  isApproved: {
-    type: Boolean,
-    default: true, // Optional: admin review
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
-});
+  // Engagement
+  views: { type: Number, default: 0 },
+  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
-const Room  = mongoose.model('Room',roomSchema)
+  // Reports
+  reports: [
+    {
+      user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      reason: String,
+      createdAt: { type: Date, default: Date.now },
+    },
+  ],
+
+  // Post control
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  expiryDate: { type: Date, default: () => Date.now() + 30*24*60*60*1000 }, // 30 days
+  isBlocked: { type: Boolean, default: false },
+  isActive: { type: Boolean, default: true },
+
+}, { timestamps: true });
+
+// Geospatial index
+roomSchema.index({ location: "2dsphere" });
+
+const Room = mongoose.model("Room", roomSchema);
 export default Room;

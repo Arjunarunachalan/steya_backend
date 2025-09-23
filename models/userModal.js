@@ -1,55 +1,19 @@
-const mongoose = require('mongoose');
+// models/userModal.js
+import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema({
-  googleId: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-  },
-  fullName: String,
-  surname: String,
-  username: {
-    type: String,
-    unique: true,
-    sparse: true,
-  },
-  refreshTokens: [String],
-  profilePic: String,
-
-  // 📍 Location (Structured + GeoJSON)
+  authType: { type: String, enum: ["google"], required: true },
+  googleId: { type: String, unique: true },
+  email: { type: String, required: true },
+  name: String,
+  picture: String,
   location: {
-    fullAddress: String,
-    district: String,
-    state: String,
-    geoLocation: {
-      type: {
-        type: String,
-        enum: ['Point'],
-        default: 'Point',
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-        required: true,
-      },
-    },
+    lat: Number,       // latitude
+    lng: Number,       // longitude (rename from lon)
+    name: String       // place name (instead of district)
   },
+  refreshToken: String, // stored only on server
+}, { timestamps: true });
 
-  isDeleted: {
-    type: Boolean,
-    default: false,
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  }
-});
-
-// 🧭 Create a geospatial index
-userSchema.index({ 'location.geoLocation': '2dsphere' });
-
-module.exports = mongoose.model('User', userSchema);
+const User = mongoose.model("User", userSchema);
+export default User;

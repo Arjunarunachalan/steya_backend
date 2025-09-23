@@ -1,59 +1,76 @@
+import { OAuth2Client } from "google-auth-library";
+import User from "../models/userModal.js";
+import jwt from "jsonwebtoken";
 
-import { token } from "morgan";
-import jwt from 'jsonwebtoken';
-import { generateAccessToken } from "../utils/authorisation";
-import User from "../models/userModal"
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-export const LoginSuccess = (req, res) => {
-  if (req.user) {
-    const { token, user } = req.user;
+export const googleLogin = async (req, res) => {
+  try {
+    const { idToken } = req.body;
 
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
-      user,
-      token,
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
-  } else {
-    return res.status(401).json({
-      success: false,
-      message: "Not authenticated",
-    });
+
+    const { sub, email, name, picture } = ticket.getPayload();
+
+    let user = await User.findOne({ googleId: sub });
+
+    if (!user) {
+      user = await User.create({
+        authType: "google",
+        googleId: sub,
+        email,
+        name,
+        picture,
+        location: null,
+      });
+    }
+
+    // Generate tokens
+    const accessToken = jwt.sign(
+      { id: user._id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_REFRESH_SECRET
+    );
+
+    // Store refresh token server-side
+    user.refreshToken = refreshToken;
+    await user.save();
+
+    res.json({ success: true, accessToken, user }); // only send accessToken to frontend
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: "Google login failed" });
   }
 };
 
-export const LoginFailed = (req, res) => {
-  return res.status(401).json({
-    success: false,
-    message: "Login failed",
-  });
-};
+export const updateLocation = async (req, res) => {
+  console.log("lkkkkkk");
+  
+  try {
+  
+     
+    const { userId, location } = req.body;
+console.log(userId,"userid");
+console.log(location,"location");
 
-export const Logout = (req, res) => {
-  req.logout((err) => {
-    if (err) {
-      return res.status(500).json({ success: false, message: "Logout error" });
-    }
-    res.redirect(process.env.CLIENT_URL || "/");
-  });
-};
 
-export // Inside createAccessToken controller
-const createAccessToken = async (req, res) => {
-  const refreshToken = req.body.token;
-  if (!refreshToken)
-    return res.status(401).json({ success: false, message: "Refresh token not found" });
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { location },
+      { new: true }
+    );
 
-  // find user with this refresh token
-  const user = await User.findOne({ refreshTokens: refreshToken });
-  if (!user)
-    return res.status(403).json({ success: false, message: "Invalid refresh token" });
-
-  jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, decodedUser) => {
-    if (err)
-      return res.status(403).json({ success: false, message: "Token verification failed" });
-
-    const accessToken = generateAccessToken({ name: decodedUser.name });
-    res.status(200).json({ success: true, accessToken });
-  });
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: "Location update failed" });
+  }
 };
