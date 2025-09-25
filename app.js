@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import userRoutes from './routes/userRoutes.js';  // Ensure this path is correct
 import authRoute from "./routes/authRoute.js"
+import uploadRoute from './routes/uploadRoute.js'
 
 // import { errorHandler } from './middleware/errorMiddleware.js';
 
@@ -16,6 +17,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth',authRoute)
 app.use('/api/users', userRoutes);  // This should be working now
+app.use("/api/upload",uploadRoute);
 // app.use('/api/rooms', roomRoutes);
 // app.use('/api/auth', authRoutes);
 

@@ -10,6 +10,7 @@ const roomSchema = new mongoose.Schema({
 
   // Common fields
   title: { type: String, required: true },
+  
   description: { type: String, required: true },
   images: [String],
 
