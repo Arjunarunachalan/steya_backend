@@ -1,23 +1,61 @@
-// server.js
-
-import app from './app.js'; // Importing the app from app.js
+import http from 'http';
+import { Server } from 'socket.io';
+import app from './app.js';
 import connectDB from './config/db.js';
+import Chat from './models/chatmodal.js';
+import ChatRoom from './models/roommodal.js';
 import dotenv from 'dotenv';
-import  authRoutes from './routes/authRoute.js'
-// Load environment variables
-import  testRoutes from './routes/authRoute.js'
-dotenv.config();
 
-// Connect to MongoDB
+dotenv.config();
 connectDB();
 
-app.use("/api/auth", testRoutes);
-// app.use('/api',userRoutes)
-app.use('/api/auth',authRoutes)    
-app.use('/api/auth',authRoutes)
-// app.use('/api/rooms',roomRoute)
-// Start server
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: { origin: "*" },
 });
+
+io.on('connection', (socket) => {
+  console.log('✅ User connected', socket.id);
+
+  // Join a chatroom
+  socket.on('joinRoom', async ({ roomId }) => {
+    socket.join(roomId);
+    console.log(`User ${socket.id} joined room ${roomId}`);
+
+    // Send previous messages if they exist
+    const chat = await Chat.findOne({ roomId });
+    if (chat) {
+      socket.emit('previousMessages', chat.messages.map(msg => ({
+        ...msg._doc,
+        fromMe: false // default, frontend will mark own messages as fromMe
+      })));
+    }
+  });
+
+  // Handle sending a message
+  socket.on('sendMessage', async ({ roomId, sender, option }) => {
+    // 1️⃣ Save to Chat collection
+    let chat = await Chat.findOne({ roomId });
+    if (!chat) {
+      chat = new Chat({ roomId, messages: [] });
+    }
+    const newMessage = { sender, option, createdAt: new Date() };
+    chat.messages.push(newMessage);
+    await chat.save();
+
+    // 2️⃣ Update lastMessage in ChatRoom
+    await ChatRoom.findByIdAndUpdate(roomId, {
+      lastMessage: option,
+      updatedAt: new Date()
+    });
+
+    // 3️⃣ Broadcast to everyone in the room
+    io.in(roomId).emit('receiveMessage', { ...newMessage, fromMe: false });
+  });
+
+  socket.on('disconnect', () => console.log('❌ User disconnected', socket.id));
+});
+
+server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
