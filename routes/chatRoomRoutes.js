@@ -5,20 +5,24 @@ import { authMiddleware } from '../middlewares/authMiddleware.js';
 const router = express.Router();
 
 // Get only ACTIVE chatrooms (with messages)
+// Get ONLY ACTIVE chatrooms (with messages)
 router.get('/chatrooms', authMiddleware, async (req, res) => {
   try {
     console.log("User ID from authMiddleware:", req.user._id);
     
     const userId = req.user._id;
+    
+    // ✅ ONLY active rooms with messages
     const chatrooms = await ChatRoom.find({ 
       participants: userId,
-      status: 'active', // Only return rooms with messages
-      hasMessages: true 
+      status: 'active', // ONLY active
+      hasMessages: true // ONLY rooms with messages
     })
       .populate('participants', 'name email picture')
+      .populate('productId', 'title images price')
       .sort({ updatedAt: -1 });
     
-    console.log(chatrooms, "Fetched ACTIVE chatrooms");
+    console.log(`📱 Fetched ${chatrooms.length} ACTIVE chatrooms for user ${userId}`);
     
     res.json(chatrooms);
   } catch (error) {
@@ -103,8 +107,8 @@ router.post('/create-room', authMiddleware, async (req, res) => {
       productId,
       participants: [inquirerId, ownerId],
       lastMessage: null,
-      status: 'pending', // Start as pending
-      hasMessages: false // No messages yet
+      status: 'pending',
+      hasMessages: false
     });
 
     await chatRoom.save();
@@ -120,10 +124,32 @@ router.post('/create-room', authMiddleware, async (req, res) => {
 
   } catch (error) {
     console.error('Error creating chatroom:', error);
+    
+    // 🚨 ADD THIS DUPLICATE KEY ERROR HANDLING
+    if (error.code === 11000 || error.code === 11001) {
+      console.log('🔄 Duplicate room detected, finding existing room...');
+      
+      // Find the existing room that caused the conflict
+      const existingRoom = await ChatRoom.findOne({
+        productId: req.body.productId,
+        participants: { $all: [req.user._id, req.body.ownerId] }
+      });
+      
+      if (existingRoom) {
+        console.log('✅ Found existing room after duplicate error:', existingRoom._id);
+        return res.json({ 
+          roomId: existingRoom._id, 
+          isNew: false,
+          status: existingRoom.status,
+          hasMessages: existingRoom.hasMessages,
+          message: 'Chat room already exists' 
+        });
+      }
+    }
+    
     res.status(500).json({ message: 'Failed to create chatroom', error: error.message });
   }
 });
-
 // Activate room when first message is sent (call this from socket)
 router.patch('/activate-room/:roomId', authMiddleware, async (req, res) => {
   try {
