@@ -68,6 +68,7 @@ router.get('/check-room', authMiddleware, async (req, res) => {
 });
 
 // Create PENDING room (no messages yet)
+// Create PENDING room (no messages yet) - FIXED VERSION
 router.post('/create-room', authMiddleware, async (req, res) => {
   console.log("Create room request body:", req.body);
   try {
@@ -84,10 +85,11 @@ router.post('/create-room', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'You cannot chat with yourself' });
     }
 
-    // Check if ANY room exists (pending or active)
+    // ✅ UPDATED: Check using new fields
     let chatRoom = await ChatRoom.findOne({
       productId,
-      participants: { $all: [inquirerId, ownerId] },
+      ownerId,
+      inquirerId,
       status: { $ne: 'cancelled' }
     });
 
@@ -101,11 +103,13 @@ router.post('/create-room', authMiddleware, async (req, res) => {
       });
     }
 
-    // Create NEW PENDING chatroom
+    // ✅ UPDATED: Create room with NEW REQUIRED FIELDS
     chatRoom = new ChatRoom({
       name: productTitle || 'Product Inquiry',
       productId,
       participants: [inquirerId, ownerId],
+      ownerId: ownerId,                    // ✅ ADD THIS
+      inquirerId: inquirerId,              // ✅ ADD THIS
       lastMessage: null,
       status: 'pending',
       hasMessages: false
@@ -125,14 +129,15 @@ router.post('/create-room', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error creating chatroom:', error);
     
-    // 🚨 ADD THIS DUPLICATE KEY ERROR HANDLING
+    // 🚨 ENHANCED DUPLICATE HANDLING FOR NEW INDEX
     if (error.code === 11000 || error.code === 11001) {
       console.log('🔄 Duplicate room detected, finding existing room...');
       
-      // Find the existing room that caused the conflict
+      // ✅ UPDATED: Find using new fields
       const existingRoom = await ChatRoom.findOne({
         productId: req.body.productId,
-        participants: { $all: [req.user._id, req.body.ownerId] }
+        ownerId: req.body.ownerId,
+        inquirerId: req.user._id
       });
       
       if (existingRoom) {
