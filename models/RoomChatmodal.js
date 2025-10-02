@@ -8,7 +8,7 @@ const chatRoomSchema = new mongoose.Schema({
   },
   productId: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Product',
+    ref: 'Room',
     required: true,
     index: true
   },

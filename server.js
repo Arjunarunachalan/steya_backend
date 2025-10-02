@@ -260,7 +260,7 @@ io.on('connection', (socket) => {
           const recipientSocketId = onlineUsers.get(participant._id.toString());
           const isRecipientInRoom = recipientSocketId && io.sockets.adapter.rooms.get(roomId)?.has(recipientSocketId);
           
-      console.log(`👤 Participant ${recipientId}:`, {
+      console.log(`👤 Participant ${participant._id}:`, {
   socketId: recipientSocketId,
   inRoom: isRecipientInRoom,
   hasPushToken: !!participant.expoPushToken  // ✅ CORRECT
