@@ -260,13 +260,13 @@ io.on('connection', (socket) => {
           const recipientSocketId = onlineUsers.get(participant._id.toString());
           const isRecipientInRoom = recipientSocketId && io.sockets.adapter.rooms.get(roomId)?.has(recipientSocketId);
           
-          console.log(`👤 Participant ${participant._id}:`, {
-            socketId: recipientSocketId,
-            inRoom: isRecipientInRoom,
-            hasPushToken: !!participant.pushToken
-          });
+      console.log(`👤 Participant ${recipientId}:`, {
+  socketId: recipientSocketId,
+  inRoom: isRecipientInRoom,
+  hasPushToken: !!participant.expoPushToken  // ✅ CORRECT
+});
 
-          if (!isRecipientInRoom && participant.pushToken) {
+          if (!isRecipientInRoom && participant.expoPushToken) {
             const notifEnabled = participant.notificationSettings?.enabled !== false;
             const chatNotifEnabled = participant.notificationSettings?.chatMessages !== false;
             
@@ -277,7 +277,7 @@ io.on('connection', (socket) => {
 
             if (notifEnabled && chatNotifEnabled) {
               try {
-                await sendPushNotification(participant.pushToken, {
+                await sendPushNotification(participant.expoPushToken, {
                   title: senderUser ? `${senderUser.name}` : 'New Message',
                   body: optionText.length > 100 ? optionText.substring(0, 100) + '...' : optionText,
                   additionalData: {

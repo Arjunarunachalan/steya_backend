@@ -6,26 +6,29 @@ import { authMiddleware } from '../middlewares/authMiddleware.js';
 const router = express.Router();
 
 // Register/Update push token
+// routes/pushTokenRoutes.js - UPDATED
 router.post('/register-token', authMiddleware, async (req, res) => {
   try {
     const { pushToken, device } = req.body;
     const userId = req.user._id;
 
+    console.log('📱 Registering token for user:', userId);
+    console.log('📱 Token received:', pushToken);
+
     if (!pushToken) {
       return res.status(400).json({ message: 'Push token is required' });
     }
 
-    // Check if token already exists for this user
     const user = await User.findById(userId);
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Update primary token
-    user.pushToken = pushToken;
-
-    // Add to tokens array if not exists
+    // ⭐ FIX: Use expoPushToken field
+    user.expoPushToken = pushToken;
+    
+    // Optional: Keep your pushTokens array too
     const existingTokenIndex = user.pushTokens?.findIndex(t => t.token === pushToken);
     
     if (existingTokenIndex === -1 || !user.pushTokens) {
@@ -36,13 +39,12 @@ router.post('/register-token', authMiddleware, async (req, res) => {
         addedAt: new Date()
       });
     } else {
-      // Update existing token timestamp
       user.pushTokens[existingTokenIndex].addedAt = new Date();
     }
 
     await user.save();
 
-    console.log(`✅ Push token registered for user ${userId}: ${pushToken}`);
+    console.log(`✅ Push token saved to expoPushToken field: ${pushToken.substring(0, 30)}...`);
     
     res.json({ 
       message: 'Push token registered successfully',
@@ -57,7 +59,7 @@ router.post('/register-token', authMiddleware, async (req, res) => {
   }
 });
 
-// Remove push token (on logout)
+// Also update remove-token
 router.delete('/remove-token', authMiddleware, async (req, res) => {
   try {
     const { pushToken } = req.body;
@@ -69,14 +71,11 @@ router.delete('/remove-token', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Remove from tokens array
+    // Remove from both fields
+    user.expoPushToken = null;  // ⭐ ADD THIS
+    
     if (user.pushTokens) {
       user.pushTokens = user.pushTokens.filter(t => t.token !== pushToken);
-    }
-
-    // Clear primary token if it matches
-    if (user.pushToken === pushToken) {
-      user.pushToken = null;
     }
 
     await user.save();
