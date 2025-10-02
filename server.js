@@ -252,4 +252,11 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`📡 Socket.IO ready for connections`);
 });
 
+app.get("/api/health", (req, res) => {
+  console.log("💓 Health check ping at", new Date().toISOString());
+  res.status(200).send("OK");
+});
+
+
+
 export default io;
