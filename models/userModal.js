@@ -8,11 +8,19 @@ const userSchema = new mongoose.Schema({
   name: String,
   picture: String,
   location: {
-    lat: Number,       // latitude
-    lng: Number,       // longitude (rename from lon)
-    name: String       // place name (instead of district)
+    lat: Number,
+    lng: Number,
+    name: String
   },
   refreshToken: String, // stored only on server
+
+  // --- ADD THESE FOR PUSH NOTIFICATIONS ---
+  expoPushToken: { type: String, default: null },
+  notificationSettings: {
+    chatMessages: { type: Boolean, default: true },
+    sound: { type: Boolean, default: true },
+    vibration: { type: Boolean, default: true }
+  }
 }, { timestamps: true });
 
 const User = mongoose.model("User", userSchema);
