@@ -18,39 +18,29 @@ export const sendPushNotification = async (pushToken, data) => {
     const message = {
       to: pushToken,
       sound: 'default',
-      title: data.senderName || data.title || 'New Message',
-      body: data.message || data.body || 'You have a new message',
+      title: `🔔 New message from ${data.senderName}`,  // clear header
+      body: `💬 ${data.message}`, // chat bubble vibe
       data: {
-        ...data.additionalData,
         type: 'chat_message',
         chatId: data.chatId,
         userId: data.userId,
         userName: data.senderName,
-        avatarUrl: data.senderAvatar, // Store for potential in-app use
+        selectedOption: data.message,
       },
       badge: data.badge || 1,
       priority: 'high',
       channelId: 'chat-messages',
-      
-      // Android - Limited customization
-      android: {
-        channelId: 'chat-messages',
-        priority: 'high',
-        vibrate: [0, 250, 250, 250],
-        color: '#25D366', // Only color customization
-        // icon: 'notification_icon', // Your app icon only
-        // image: data.senderAvatar, // ONLY works in expanded Big Picture mode
-      }
     };
 
     const ticketChunk = await expo.sendPushNotificationsAsync([message]);
-    console.log('✅ Push notification sent');
+    console.log('✅ Push notification sent:', ticketChunk);
     return { success: true, ticket: ticketChunk[0] };
   } catch (error) {
     console.error('❌ Error sending push notification:', error);
     return { success: false, error: error.message };
   }
 };
+
 
 
 
