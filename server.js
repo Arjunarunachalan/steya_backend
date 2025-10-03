@@ -185,7 +185,7 @@ io.on('connection', (socket) => {
       console.log(`👤 Sender info:`, senderUser);
 
       // Activate room if pending
-      const room = await ChatRoom.findById(roomId).populate('participants', '_id name pushToken notificationSettings');
+      const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
       if (room) {
         console.log(`🏠 Room status: ${room.status}, hasMessages: ${room.hasMessages}`);
         
