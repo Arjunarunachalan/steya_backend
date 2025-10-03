@@ -19,17 +19,48 @@ export const sendPushNotification = async (pushToken, data) => {
     const message = {
       to: pushToken,
       sound: 'default',
-      title: data.title || 'New Message',
-      body: data.body || 'You have a new message',
-      data: data.additionalData || {},
+      title: data.senderName || data.title || 'New Message', // Username as title
+      body: data.message || data.body || 'You have a new message', // Message content
+      data: {
+        ...data.additionalData,
+        type: 'chat_message',
+        chatId: data.chatId,
+        userId: data.userId,
+        userName: data.senderName,
+      },
       badge: data.badge || 1,
       priority: 'high',
-      channelId: 'chat-messages', // For Android
+      channelId: 'chat-messages',
+      
+      // Android-specific WhatsApp-style layout
+      android: {
+        channelId: 'chat-messages',
+        priority: 'high',
+        vibrate: [0, 250, 250, 250],
+        color: '#25D366', // WhatsApp green
+        
+        // This creates the left-side profile picture
+        image: data.senderAvatar || data.avatarUrl,
+        
+        // Messaging style for conversation layout
+        style: {
+          type: 'messaging',
+          conversation: {
+            title: data.senderName || data.title,
+            messages: [
+              {
+                text: data.message || data.body,
+                timestamp: Date.now(),
+              }
+            ]
+          }
+        }
+      }
     };
 
     // Send notification
     const ticketChunk = await expo.sendPushNotificationsAsync([message]);
-    console.log('✅ Push notification sent:', ticketChunk);
+    console.log('✅ WhatsApp-style push notification sent:', ticketChunk);
 
     return { success: true, ticket: ticketChunk[0] };
   } catch (error) {
@@ -37,6 +68,8 @@ export const sendPushNotification = async (pushToken, data) => {
     return { success: false, error: error.message };
   }
 };
+
+
 
 /**
  * Send notifications to multiple users

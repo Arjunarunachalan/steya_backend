@@ -277,19 +277,24 @@ io.on('connection', (socket) => {
 
             if (notifEnabled && chatNotifEnabled) {
               try {
+               
+
                 await sendPushNotification(participant.expoPushToken, {
-                  title: senderUser ? `${senderUser.name}` : 'New Message',
-                  body: optionText.length > 100 ? optionText.substring(0, 100) + '...' : optionText,
-                  additionalData: {
-                    type: 'chat_message',
-                    roomId: roomId.toString(),
-                    senderId: sender.toString(),
-                    senderName: senderUser?.name || 'Unknown User',
-                    screen: 'ChatScreen',
-                    productTitle: room.name
-                  },
-                  badge: 1
-                });
+  senderName: senderUser ? `${senderUser.name}` : 'New Message',
+  message: optionText.length > 100 ? optionText.substring(0, 100) + '...' : optionText,
+  senderAvatar: senderUser?.picture, // Add profile picture URL
+  chatId: roomId.toString(),
+  userId: sender.toString(),
+  badge: 1,
+  additionalData: {
+    type: 'chat_message',
+    roomId: roomId.toString(),
+    senderId: sender.toString(),
+    senderName: senderUser?.name || 'Unknown User',
+    screen: 'ChatScreen',
+    productTitle: room.name
+  }
+});
                 console.log(`🔔 Push notification sent to ${participant._id}`);
               } catch (pushError) {
                 console.error('❌ Push notification failed:', pushError);
