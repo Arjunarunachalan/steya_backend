@@ -31,6 +31,7 @@ export const sendPushNotification = async (pushToken, data) => {
       priority: 'high',
       channelId: 'chat-messages',
     };
+console.log(message,"sented message");
 
     const ticketChunk = await expo.sendPushNotificationsAsync([message]);
     console.log('✅ Push notification sent:', ticketChunk);
