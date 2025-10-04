@@ -10,7 +10,9 @@ import chatRoomRoutes from './routes/chatRoomRoutes.js';
 import pushTokenRoutes from './routes/pushTokenRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import myPostsRoutes from './routes/myPosts.js';
 
+// Use the routes
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -23,5 +25,6 @@ app.use('/api/chat', chatRoomRoutes);
 app.use('/api/push', pushTokenRoutes);
 app.use('/api/favorites', favoriteRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/posts', myPostsRoutes);
 
 export default app;

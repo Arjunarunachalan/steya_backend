@@ -226,7 +226,7 @@ router.get('/my-favorites', authMiddleware, async (req, res) => {
     const favorites = await Favorite.find({ user: userId })
       .populate({
         path: 'room',
-        select: 'title thumbnail monthlyRent description location createdAt roommatesWanted genderPreference',
+        // 👇 Removed select so all fields are included
         populate: {
           path: 'createdBy',
           select: 'name picture'
@@ -241,7 +241,7 @@ router.get('/my-favorites', authMiddleware, async (req, res) => {
     // Filter out favorites where room might be deleted
     const validFavorites = favorites.filter(fav => fav.room !== null);
 
-    console.log(`✅ FAVORITES FETCHED: ${validFavorites.length} items`);
+    console.log(`✅ FAVORITES FETCHED: ${validFavorites} `);
 
     res.json({
       success: true,
@@ -263,6 +263,7 @@ router.get('/my-favorites', authMiddleware, async (req, res) => {
     });
   }
 });
+
 
 // ✅ CHECK IF ROOM IS FAVORITED
 router.get('/check/:roomId', authMiddleware, async (req, res) => {
