@@ -1,6 +1,6 @@
 import express from 'express';
-import Report from '../models/';
-import Room from '../models/Room.js'; // Your room model
+import Report from '../models/report.js';
+import Room from '../models/RoomSchema.js'; // Your room model
 import { authMiddleware } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();

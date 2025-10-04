@@ -1,7 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+
+const app = express(); // ✅ create the app instance
+
 import userRoutes from './routes/userRoutes.js';
-import authRoute from "./routes/authRoute.js";
+import authRoute from './routes/authRoute.js';
 import roomRoutes from './routes/roomRoutes.js';
 import chatRoomRoutes from './routes/chatRoomRoutes.js';
 import pushTokenRoutes from './routes/pushTokenRoutes.js';
