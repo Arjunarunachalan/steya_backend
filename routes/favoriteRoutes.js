@@ -228,7 +228,7 @@ router.get('/my-favorites', authMiddleware, async (req, res) => {
         path: 'room',
         select: 'title thumbnail monthlyRent description location createdAt roommatesWanted genderPreference',
         populate: {
-          path: 'owner',
+          path: 'createdBy',
           select: 'name picture'
         }
       })
