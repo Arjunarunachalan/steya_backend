@@ -181,14 +181,15 @@ router.post('/toggle', authMiddleware, async (req, res) => {
       await newFavorite.save();
       
       // Populate the new favorite
-      await newFavorite.populate({
-        path: 'room',
-        select: 'title thumbnail monthlyRent description location createdAt',
-        populate: {
-          path: 'owner',
-          select: 'name picture'
-        }
-      });
+  await newFavorite.populate({
+  path: 'room',
+  select: 'title thumbnail monthlyRent description location createdAt',
+  populate: {
+    path: 'createdBy', // ✅ matches Room schema
+    select: 'name picture'
+  }
+ });
+
       
       action = 'added';
       result = { isFavorited: true, favorite: newFavorite };
