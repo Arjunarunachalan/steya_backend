@@ -55,14 +55,6 @@ const chatRoomSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-// ✅ REMOVE THIS PROBLEMATIC INDEX:
-// chatRoomSchema.index({ productId: 1, participants: 1 }, { 
-//   unique: true,
-//   partialFilterExpression: { status: { $ne: 'cancelled' } }
-// });
-
-// ✅ ADD THESE CORRECT INDEXES INSTEAD:
-// Prevent duplicate rooms between same owner & inquirer for same product
 chatRoomSchema.index({ 
   productId: 1, 
   ownerId: 1, 

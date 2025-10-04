@@ -1,11 +1,11 @@
-// server.js - WITH ENHANCED DEBUGGING
+// server.js - UPDATED HYBRID CHAT VERSION (Enhanced)
 import http from 'http';
 import { Server } from 'socket.io';
 import app from './app.js';
 import connectDB from './config/db.js';
 import Chat from './models/chatmodal.js';
 import ChatRoom from './models/RoomChatmodal.js';
-import User from './models/userModal.js'
+import User from './models/userModal.js';
 import dotenv from 'dotenv';
 import { sendPushNotification } from './utils/pushNotificationService.js';
 
@@ -20,215 +20,220 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Store online users
-const onlineUsers = new Map(); // userId -> socketId
+const onlineUsers = new Map();
 
-// 🔥 ENHANCED DEBUGGING MIDDLEWARE
+// Rate limiting
+const MESSAGE_RATE_LIMIT = 10; // messages per minute
+const userMessageCounts = new Map();
+
+const cleanupOldMessages = () => {
+  const now = Date.now();
+  for (const [userId, messages] of userMessageCounts.entries()) {
+    const recent = messages.filter(time => now - time < 60000);
+    if (recent.length === 0) {
+      userMessageCounts.delete(userId);
+    } else {
+      userMessageCounts.set(userId, recent);
+    }
+  }
+};
+
+// Cleanup every minute
+setInterval(cleanupOldMessages, 60000);
+
 io.use((socket, next) => {
-  console.log(`🔄 Incoming connection attempt from:`, socket.handshake.address);
-  console.log(`📋 Handshake query:`, socket.handshake.query);
-  console.log(`📦 Handshake headers:`, socket.handshake.headers);
+  console.log(`🔄 Incoming connection from:`, socket.handshake.address);
   next();
 });
 
 io.on('connection', (socket) => {
   console.log('✅ User connected', socket.id, 'at', new Date().toISOString());
-  console.log(`📊 Total connections: ${io.engine.clientsCount}`);
 
-  // 🔥 ENHANCED: Connection monitoring
-  socket.conn.on("packet", (packet) => {
-    console.log(`📦 ${socket.id} packet:`, packet.type);
-  });
-
-  socket.conn.on("close", (reason) => {
-    console.log(`🔌 ${socket.id} closed:`, reason);
-  });
-
-  socket.conn.on("upgrade", (transport) => {
-    console.log(`⚡ ${socket.id} upgraded to:`, transport.name);
-  });
-
-  // User comes online
   socket.on('userOnline', ({ userId }) => {
-    if (!userId) {
-      console.error('❌ userOnline: Missing userId');
-      return;
-    }
+    if (!userId) return;
     onlineUsers.set(userId.toString(), socket.id);
     console.log(`👤 User ${userId} is online (socket: ${socket.id})`);
-    console.log('📊 Online users:', Array.from(onlineUsers.entries()));
   });
 
-  // Join a chatroom - ENHANCED DEBUGGING
   socket.on('joinRoom', async ({ roomId, userId }) => {
-    console.log(`🎯 JOIN ROOM REQUEST:`);
-    console.log(`   - Socket: ${socket.id}`);
-    console.log(`   - User: ${userId}`);
-    console.log(`   - Room: ${roomId}`);
-    console.log(`   - Timestamp: ${new Date().toISOString()}`);
+    console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
 
     if (!roomId || !userId) {
-      console.error('❌ joinRoom: Missing roomId or userId');
       socket.emit('error', { message: 'Missing roomId or userId' });
       return;
     }
 
     socket.join(roomId);
-    console.log(`✅ User ${socket.id} joined room ${roomId}`);
-    console.log(`🏠 Rooms for ${socket.id}:`, Array.from(socket.rooms));
-    console.log(`👥 All users in room ${roomId}:`, Array.from(io.sockets.adapter.rooms.get(roomId) || []));
 
     try {
       const chatRoom = await ChatRoom.findById(roomId).populate('participants', '_id name picture');
       if (!chatRoom) {
-        console.error('❌ Chat room not found:', roomId);
         socket.emit('error', { message: 'Chat room not found' });
         return;
       }
-
-      if (!chatRoom.participants || chatRoom.participants.length < 2) {
-        console.error('❌ Invalid participants in room:', roomId);
-        socket.emit('error', { message: 'Invalid chat room participants' });
-        return;
-      }
-
-      console.log('🏠 ChatRoom participants:', chatRoom.participants.map(p => ({
-        id: p._id,
-        name: p.name
-      })));
 
       const userRole = chatRoom.participants[0]._id.toString() === userId.toString() 
         ? 'inquirer' 
         : 'owner';
 
-      console.log(`✅ User ${userId} assigned role: ${userRole}`);
-
       const chat = await Chat.findOne({ roomId });
       
       let currentState = 'START';
       let messages = [];
+      let conversationMode = 'hybrid';
 
-      if (chat && chat.messages.length > 0) {
-        messages = chat.messages.map(msg => ({
-          sender: msg.sender,
-          optionId: msg.optionId,
-          option: msg.option,
-          nextState: msg.nextState,
-          senderRole: msg.senderRole,
-          createdAt: msg.createdAt,
-          fromMe: msg.sender?.toString() === userId?.toString()
-        }));
+      if (chat) {
+        conversationMode = chat.conversationMode || 'hybrid';
+        currentState = chat.currentState || 'START';
         
-        const lastMsg = chat.messages[chat.messages.length - 1];
-        currentState = lastMsg.nextState || 'START';
-        console.log('📍 Resuming from state:', currentState, 'Last message:', lastMsg.option);
-      } else {
-        console.log('📭 No previous messages, starting fresh');
+        if (chat.messages.length > 0) {
+          messages = chat.messages.map(msg => ({
+            sender: msg.sender,
+            optionId: msg.optionId,
+            option: msg.option,
+            text: msg.text,
+            messageType: msg.messageType || 'option',
+            nextState: msg.nextState,
+            senderRole: msg.senderRole,
+            createdAt: msg.createdAt,
+            fromMe: msg.sender?.toString() === userId?.toString()
+          }));
+        }
       }
 
-      // Send initial data
-      const initialData = {
+      socket.emit('initialData', {
         messages,
         currentState,
         userRole,
+        conversationMode,
         roomInfo: {
           propertyTitle: chatRoom.name,
           participants: chatRoom.participants
         }
-      };
-
-      socket.emit('initialData', initialData);
-      console.log(`✅ Sent initial data to user ${userId}:`, {
-        messageCount: messages.length,
-        currentState,
-        userRole,
-        roomName: chatRoom.name
       });
 
     } catch (error) {
       console.error('❌ Error joining room:', error);
-      console.error('❌ Error stack:', error.stack);
-      socket.emit('error', { 
-        message: 'Failed to join room', 
-        error: error.message,
-        stack: error.stack 
-      });
+      socket.emit('error', { message: 'Failed to join room', error: error.message });
     }
   });
 
-  // Handle sending a message - ENHANCED DEBUGGING
-  socket.on('sendMessage', async ({ roomId, sender, optionId, optionText, nextState, senderRole }) => {
-    console.log(`📤 SEND MESSAGE REQUEST:`);
-    console.log(`   - Room: ${roomId}`);
-    console.log(`   - Sender: ${sender}`);
-    console.log(`   - Option: ${optionText}`);
-    console.log(`   - Next State: ${nextState}`);
-    console.log(`   - Sender Role: ${senderRole}`);
+  // ENHANCED HYBRID MESSAGE HANDLER
+  socket.on('sendMessage', async ({ 
+    roomId, 
+    sender, 
+    optionId, 
+    optionText, 
+    text,
+    messageType = 'option',
+    nextState, 
+    senderRole 
+  }) => {
+    console.log(`📤 SEND MESSAGE (${messageType}):`, {
+      room: roomId,
+      sender,
+      type: messageType,
+      content: messageType === 'freetext' ? text : optionText
+    });
 
     try {
-      if (!roomId || !sender || !optionId || !optionText || !nextState || !senderRole) {
-        const missing = [];
-        if (!roomId) missing.push('roomId');
-        if (!sender) missing.push('sender');
-        if (!optionId) missing.push('optionId');
-        if (!optionText) missing.push('optionText');
-        if (!nextState) missing.push('nextState');
-        if (!senderRole) missing.push('senderRole');
-        
-        console.error('❌ Missing required fields:', missing);
-        socket.emit('error', { message: `Missing required fields: ${missing.join(', ')}` });
+      // Enhanced validation
+      if (!roomId || !sender || !senderRole) {
+        socket.emit('error', { message: 'Missing required fields' });
         return;
       }
 
-      // Get sender info
-      const senderUser = await User.findById(sender).select('name picture');
-      console.log(`👤 Sender info:`, senderUser);
-
-      // Activate room if pending
-      const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
-      if (room) {
-        console.log(`🏠 Room status: ${room.status}, hasMessages: ${room.hasMessages}`);
-        
-        if (room.status === 'pending' && !room.hasMessages) {
-          await ChatRoom.findByIdAndUpdate(roomId, {
-            status: 'active',
-            hasMessages: true,
-            firstMessageAt: new Date(),
-            lastMessage: optionText,
-            updatedAt: new Date()
-          });
-          console.log('✅ Room activated from pending to active:', roomId);
-        } else {
-          await ChatRoom.findByIdAndUpdate(roomId, {
-            lastMessage: optionText,
-            updatedAt: new Date()
-          });
-        }
-      } else {
-        console.error('❌ Room not found in database:', roomId);
+      // Rate limiting check
+      const now = Date.now();
+      const userMessages = userMessageCounts.get(sender.toString()) || [];
+      const recentMessages = userMessages.filter(time => now - time < 60000);
+      
+      if (recentMessages.length >= MESSAGE_RATE_LIMIT) {
+        socket.emit('error', { message: 'Message rate limit exceeded. Please wait a moment.' });
+        return;
       }
 
-      // Save message
+      // For option messages, require optionId and optionText
+      if (messageType === 'option' && (!optionId || !optionText)) {
+        socket.emit('error', { message: 'Option messages require optionId and optionText' });
+        return;
+      }
+
+      // For freetext messages, require text and validate length
+      if (messageType === 'freetext') {
+        if (!text) {
+          socket.emit('error', { message: 'Freetext messages require text' });
+          return;
+        }
+        if (text.length > 500) {
+          socket.emit('error', { message: 'Message too long (max 500 characters)' });
+          return;
+        }
+        if (text.trim().length === 0) {
+          socket.emit('error', { message: 'Message cannot be empty' });
+          return;
+        }
+      }
+
+      const senderUser = await User.findById(sender).select('name picture');
+      
+      // Update room status
+      const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
+      if (room) {
+        const updateData = {
+          lastMessage: messageType === 'freetext' ? text : optionText,
+          updatedAt: new Date()
+        };
+
+        if (room.status === 'pending' && !room.hasMessages) {
+          updateData.status = 'active';
+          updateData.hasMessages = true;
+          updateData.firstMessageAt = new Date();
+        }
+
+        await ChatRoom.findByIdAndUpdate(roomId, updateData);
+      }
+
+      // Save message to database
       let chat = await Chat.findOne({ roomId });
       if (!chat) {
-        chat = new Chat({ roomId, messages: [] });
-        console.log('📝 Created new chat document');
-      } else {
-        console.log('📝 Found existing chat with', chat.messages.length, 'messages');
+        chat = new Chat({ 
+          roomId, 
+          messages: [],
+          conversationMode: 'hybrid',
+          currentState: nextState || 'START'
+        });
       }
 
       const newMessage = {
         sender,
-        optionId,
-        option: optionText,
-        nextState,
+        messageType,
         senderRole,
         createdAt: new Date()
       };
 
+      // Add type-specific fields
+      if (messageType === 'option') {
+        newMessage.optionId = optionId;
+        newMessage.option = optionText;
+        newMessage.nextState = nextState;
+      } else if (messageType === 'freetext') {
+        newMessage.text = text;
+        newMessage.nextState = chat.currentState; // Keep current state for freetext
+      }
+
       chat.messages.push(newMessage);
+      
+      // Update conversation state if it changed
+      if (nextState && messageType === 'option') {
+        chat.currentState = nextState;
+      }
+      
       await chat.save();
-      console.log('💾 Message saved to database');
+
+      // Update rate limiting
+      recentMessages.push(now);
+      userMessageCounts.set(sender.toString(), recentMessages);
 
       // Broadcast to room
       const broadcastData = {
@@ -236,143 +241,129 @@ io.on('connection', (socket) => {
           sender: newMessage.sender,
           optionId: newMessage.optionId,
           option: newMessage.option,
+          text: newMessage.text,
+          messageType: newMessage.messageType,
           nextState: newMessage.nextState,
           senderRole: newMessage.senderRole,
           createdAt: newMessage.createdAt
         },
-        nextState
+        nextState: messageType === 'option' ? nextState : chat.currentState
       };
 
-      console.log(`📢 Broadcasting to room ${roomId}:`, broadcastData);
       io.in(roomId).emit('newMessage', broadcastData);
-      console.log(`✅ Message broadcast to room ${roomId}`);
 
-      // 🔔 PUSH NOTIFICATIONS - ENHANCED DEBUGGING
+      // Enhanced push notifications
       if (room && room.participants) {
-        console.log(`🔔 Checking push notifications for ${room.participants.length} participants`);
-        
         for (const participant of room.participants) {
-          if (participant._id.toString() === sender.toString()) {
-            console.log(`⏩ Skipping sender: ${participant._id}`);
-            continue;
-          }
+          if (participant._id.toString() === sender.toString()) continue;
           
           const recipientSocketId = onlineUsers.get(participant._id.toString());
           const isRecipientInRoom = recipientSocketId && io.sockets.adapter.rooms.get(roomId)?.has(recipientSocketId);
-          
-      console.log(`👤 Participant ${participant._id}:`, {
-  socketId: recipientSocketId,
-  inRoom: isRecipientInRoom,
-  hasPushToken: !!participant.expoPushToken  // ✅ CORRECT
-});
 
           if (!isRecipientInRoom && participant.expoPushToken) {
             const notifEnabled = participant.notificationSettings?.enabled !== false;
             const chatNotifEnabled = participant.notificationSettings?.chatMessages !== false;
-            
-            console.log(`🔔 Notification settings for ${participant._id}:`, {
-              notifEnabled,
-              chatNotifEnabled
-            });
 
             if (notifEnabled && chatNotifEnabled) {
               try {
-               
-
+                const messageContent = messageType === 'freetext' ? text : optionText;
+                
                 await sendPushNotification(participant.expoPushToken, {
-  senderName: senderUser ? `${senderUser.name}` : 'New Message',
-  message: optionText.length > 100 ? optionText.substring(0, 100) + '...' : optionText,
-  senderAvatar: senderUser?.picture, // Add profile picture URL
-  chatId: roomId.toString(),
-  userId: sender.toString(),
-  badge: 1,
-  additionalData: {
-    type: 'chat_message',
-    roomId: roomId.toString(),
-    senderId: sender.toString(),
-    senderName: senderUser?.name || 'Unknown User',
-    screen: 'ChatScreen',
-    productTitle: room.name
-  }
-});
-                console.log(`🔔 Push notification sent to ${participant._id}`);
+                  senderName: senderUser ? `${senderUser.name}` : 'New Message',
+                  message: messageContent.length > 100 
+                    ? messageContent.substring(0, 100) + '...' 
+                    : messageContent,
+                  senderAvatar: senderUser?.picture,
+                  chatId: roomId.toString(),
+                  userId: sender.toString(),
+                  badge: 1,
+                  additionalData: {
+                    type: 'chat_message',
+                    roomId: roomId.toString(),
+                    senderId: sender.toString(),
+                    senderName: senderUser?.name || 'Unknown User',
+                    screen: 'ChatScreen',
+                    productTitle: room.name,
+                    messageType: messageType
+                  }
+                });
               } catch (pushError) {
                 console.error('❌ Push notification failed:', pushError);
               }
-            } else {
-              console.log(`🔕 Notifications disabled for ${participant._id}`);
             }
-          } else {
-            console.log(`🔕 Skipping push for ${participant._id} (online in room)`);
           }
         }
       }
 
     } catch (error) {
       console.error('❌ Error sending message:', error);
-      console.error('❌ Error stack:', error.stack);
-      socket.emit('error', { 
-        message: 'Failed to send message', 
-        error: error.message,
-        stack: error.stack 
-      });
+      socket.emit('error', { message: 'Failed to send message', error: error.message });
     }
   });
 
-  // Handle typing indicator
+  // Message status updates
+  socket.on('messageStatus', async ({ roomId, messageId, status }) => {
+    try {
+      const chat = await Chat.findOne({ roomId });
+      if (chat) {
+        const message = chat.messages.id(messageId);
+        if (message) {
+          message.status = status;
+          await chat.save();
+          
+          // Broadcast status update
+          socket.to(roomId).emit('messageStatusUpdate', {
+            messageId,
+            status,
+            updatedAt: new Date()
+          });
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error updating message status:', error);
+    }
+  });
+
   socket.on('typing', ({ roomId, userId, isTyping }) => {
-    console.log(`⌨️ Typing: User ${userId} in room ${roomId} - ${isTyping}`);
     socket.to(roomId).emit('userTyping', { userId, isTyping });
   });
 
-  // Handle user leaving room
   socket.on('leaveRoom', ({ roomId, userId }) => {
-    console.log(`👋 User ${userId} leaving room ${roomId}`);
     socket.leave(roomId);
-    console.log(`✅ User left room. Current rooms:`, Array.from(socket.rooms));
   });
 
   socket.on('disconnect', (reason) => {
     console.log(`❌ User disconnected: ${socket.id}, Reason: ${reason}`);
     
-    // Remove from online users
     for (const [userId, socketId] of onlineUsers.entries()) {
       if (socketId === socket.id) {
         onlineUsers.delete(userId);
-        console.log(`👋 User ${userId} went offline`);
         break;
       }
     }
-    
-    console.log('📊 Remaining online users:', Array.from(onlineUsers.entries()));
-    console.log(`📊 Total connections now: ${io.engine.clientsCount}`);
-  });
-
-  socket.on('error', (error) => {
-    console.error('❌ Socket error:', error);
   });
 });
 
-// 🔥 ADD DEBUG ENDPOINTS
+// Enhanced debug endpoints
 app.get("/api/debug/connections", (req, res) => {
   const connections = [];
   io.sockets.sockets.forEach(socket => {
     connections.push({
       id: socket.id,
       connected: socket.connected,
-      rooms: Array.from(socket.rooms),
-      handshake: {
-        address: socket.handshake.address,
-        query: socket.handshake.query,
-        headers: socket.handshake.headers
-      }
+      rooms: Array.from(socket.rooms)
     });
   });
   
   res.json({
     totalConnections: io.engine.clientsCount,
     onlineUsers: Array.from(onlineUsers.entries()),
-    connections: connections
+    connections,
+    rateLimits: Array.from(userMessageCounts.entries()).map(([userId, times]) => ({
+      userId,
+      messageCount: times.length,
+      lastMinute: times.filter(time => Date.now() - time < 60000).length
+    }))
   });
 });
 
@@ -384,35 +375,30 @@ app.get("/api/debug/rooms", (req, res) => {
   
   res.json({
     totalRooms: Object.keys(rooms).length,
-    rooms: rooms
+    rooms
   });
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM received, closing server...');
   server.close(() => {
-    console.log('Server closed');
     process.exit(0);
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📡 Socket.IO ready for connections`);
-  console.log(`🐛 Debug endpoints available:`);
-  console.log(`   - /api/health`);
-  console.log(`   - /api/debug/connections`);
-  console.log(`   - /api/debug/rooms`);
+  console.log(`📡 Socket.IO ready for ENHANCED HYBRID chat`);
+  console.log(`🛡️  Rate limiting: ${MESSAGE_RATE_LIMIT} messages/minute`);
 });
 
 app.get("/api/health", (req, res) => {
-  console.log("💓 Health check ping at", new Date().toISOString());
   res.status(200).json({
     status: "OK",
     timestamp: new Date().toISOString(),
     connections: io.engine.clientsCount,
-    onlineUsers: onlineUsers.size
+    onlineUsers: onlineUsers.size,
+    rateLimitedUsers: userMessageCounts.size,
+    mode: 'enhanced-hybrid'
   });
 });
 
