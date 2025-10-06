@@ -164,7 +164,6 @@ export const uploadRooms = async (req, res) => {
     for (let i = 0; i < allFiles.length; i++) {
       const file = allFiles[i];
 
-      // Skip invalid
       if (!file.buffer || file.buffer.length === 0) continue;
 
       // Resize + watermark
@@ -182,18 +181,16 @@ export const uploadRooms = async (req, res) => {
 
       // Upload main
       const mainKey = `properties/${uuidv4()}-${Date.now()}-main.jpg`;
-      const mainResult = await s3
-        .upload({
-          Bucket: BUCKET_NAME,
-          Key: mainKey,
-          Body: mainBuffer,
-          ContentType: "image/jpeg",
-        })
-        .promise();
+      const mainResult = await s3.upload({
+        Bucket: BUCKET_NAME,
+        Key: mainKey,
+        Body: mainBuffer,
+        ContentType: "image/jpeg",
+      }).promise();
 
       const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
 
-      // If it's the first file → generate + upload thumbnail
+      // First file → generate thumbnail
       if (i === 0) {
         const thumbBuffer = await sharp(file.buffer)
           .resize({ width: 300, withoutEnlargement: true })
@@ -201,21 +198,17 @@ export const uploadRooms = async (req, res) => {
           .toBuffer();
 
         const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-        const thumbResult = await s3
-          .upload({
-            Bucket: BUCKET_NAME,
-            Key: thumbKey,
-            Body: thumbBuffer,
-            ContentType: "image/jpeg",
-          })
-          .promise();
+        const thumbResult = await s3.upload({
+          Bucket: BUCKET_NAME,
+          Key: thumbKey,
+          Body: thumbBuffer,
+          ContentType: "image/jpeg",
+        }).promise();
 
         const thumbUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}`;
-
-        thumbnail = { url: thumbUrl }; // save only once
+        thumbnail = { url: thumbUrl };
       }
 
-      // Push only main URL to images
       images.push({ originalUrl: mainUrl });
     }
 
@@ -255,52 +248,73 @@ export const uploadRooms = async (req, res) => {
       return Array.isArray(value) ? value[value.length - 1] : value;
     };
 
-    // Create room doc
-    const roomData = {
-      category: getValue("category"),
-      title: getValue("title"),
-      description: getValue("description"),
-      images,
-      thumbnail, // only one thumbnail
-      location: parsedLocation,
-      contactPhone: getValue("contactPhone"),
-      showPhonePublic: getValue("showPhonePublic") === "true",
-      monthlyRent: getValue("monthlyRent"),
-      priceRange: parseJSON("priceRange"),
-      securityDeposit: getValue("securityDeposit"),
-      roommatesWanted: getValue("roommatesWanted"),
-      genderPreference: getValue("genderPreference"),
-      habitPreferences: parseJSON("habitPreferences"),
-      purpose: parseJSON("purpose"),
-      availableSpace: getValue("availableSpace"),
-      pgGenderCategory: getValue("pgGenderCategory"),
-      roomTypesAvailable: parseJSON("roomTypesAvailable"),
-      mealsProvided: getValue("mealsProvided"),
-      amenities: parseJSON("amenities"),
-      rules: parseJSON("rules"),
-      propertyType: getValue("propertyType"),
-      furnishedStatus: getValue("furnishedStatus"),
-      squareFeet: getValue("squareFeet"),
-      bedrooms: getValue("bedrooms"),
-      bathrooms: getValue("bathrooms"),
-      balconies: getValue("balconies"),
-      floorNumber: getValue("floorNumber"),
-      totalFloors: getValue("totalFloors"),
-      tenantPreference: getValue("tenantPreference"),
-      parking: getValue("parking"),
-      expiryDate: getValue("expiryDate"),
-      createdBy: req.user.id,
+    // Fix for mealsProvided
+    const parseMealsProvided = () => {
+      const value = req.body.mealsProvided;
+      if (!value) return [];
+      if (Array.isArray(value)) {
+        // Could be ["breakfast","lunch"] or ["[\"breakfast\",\"lunch\"]"]
+        return value.flatMap(v => {
+          try {
+            return typeof v === "string" ? JSON.parse(v) : v;
+          } catch {
+            return v;
+          }
+        });
+      } else if (typeof value === "string") {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return [value];
+        }
+      }
+      return [];
     };
 
-     
-      
+    // Create room doc
+  const roomData = {
+  category: getValue("category") || null,
+  title: getValue("title") || "",
+  description: getValue("description") || "",
+  images,
+  thumbnail, 
+  location: parsedLocation || null,
+  contactPhone: getValue("contactPhone") || "",
+  showPhonePublic: getValue("showPhonePublic") === "true",
+  monthlyRent: getValue("monthlyRent") || null,
+  priceRange: parseJSON("priceRange") || {},
+  securityDeposit: getValue("securityDeposit") || null,
+  roommatesWanted: getValue("roommatesWanted") || null,
+  genderPreference: getValue("genderPreference") || null,
+  habitPreferences: parseJSON("habitPreferences") || [],
+  purpose: parseJSON("purpose") || [],
+  availableSpace: getValue("availableSpace") || null,
+  pgGenderCategory: getValue("pgGenderCategory") || null,
+  roomTypesAvailable: parseJSON("roomTypesAvailable") || [],
+  mealsProvided: parseJSON("mealsProvided") || [],
+  amenities: parseJSON("amenities") || [],
+  rules: parseJSON("rules") || [],
+  propertyType: getValue("propertyType") || null,
+  furnishedStatus: getValue("furnishedStatus") || null,
+  squareFeet: getValue("squareFeet") || null,
+  bedrooms: getValue("bedrooms") || null,
+  bathrooms: getValue("bathrooms") || null,
+  balconies: getValue("balconies") || null,
+  floorNumber: getValue("floorNumber") || null,
+  totalFloors: getValue("totalFloors") || null,
+  tenantPreference: getValue("tenantPreference") || null,
+  parking: getValue("parking") || null,
+  expiryDate: getValue("expiryDate") || null,
+  createdBy: req.user.id,
+};
+
     const room = new Room(roomData);
+     console.log('====================================');
+    console.log(roomData, "ddddddddddddddd");
+    console.log('====================================');
+   
+   
     await room.save();
-
-
-    
-       
-
 
     res.status(201).json({
       success: true,
@@ -310,6 +324,7 @@ export const uploadRooms = async (req, res) => {
         hasThumbnail: !!room.thumbnail,
       },
     });
+
   } catch (err) {
     console.error("❌ Create Room Error:", err);
     res.status(500).json({
@@ -320,6 +335,308 @@ export const uploadRooms = async (req, res) => {
   }
 };
 
+
+
+export const updateRoom = async (req, res) => {
+  try {
+    // ✅ ADD COMPLETE DEBUGGING
+    console.log('🔍 COMPLETE REQUEST DEBUG:');
+    console.log('1. req.files:', req.files);
+    console.log('2. req.body keys:', Object.keys(req.body));
+    console.log('3. req.body existingImages:', req.body.existingImages);
+    
+    const { roomId } = req.params;
+    const userId = req.user.id;
+
+    console.log(`🔄 UPDATE ROOM: User ${userId} → Room ${roomId}`);
+
+    // Check if room exists and user owns it
+    const existingRoom = await Room.findOne({ 
+      _id: roomId, 
+      createdBy: userId 
+    });
+
+    if (!existingRoom) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Room not found or you do not have permission to edit this room' 
+      });
+    }
+
+    // ✅ Get existing images that should be KEPT from frontend
+    const existingImagesToKeep = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
+    
+    // ✅ FIXED: Properly count files from req.files object
+    const imageFiles = req.files && req.files.images ? 
+      (Array.isArray(req.files.images) ? req.files.images : [req.files.images]) : [];
+    const totalNewFiles = imageFiles.length + (req.files && req.files.thumbnail ? 1 : 0);
+
+    console.log('📸 Image Update Info:', {
+      currentImages: existingRoom.images.length,
+      imagesToKeep: existingImagesToKeep.length,
+      newFiles: totalNewFiles,
+      imageFiles: imageFiles.length,
+      hasThumbnail: !!(req.files && req.files.thumbnail)
+    });
+
+    // ✅ Identify images to DELETE (only those NOT being kept)
+    const imagesToDelete = existingRoom.images.filter(existingImg => 
+      !existingImagesToKeep.includes(existingImg.originalUrl)
+    );
+
+    console.log('🗑️ Images to delete from S3:', imagesToDelete.length);
+
+    // ✅ SAFELY delete only images that are NOT used by other rooms
+    if (imagesToDelete.length > 0) {
+      await safelyDeleteImagesFromS3(imagesToDelete, roomId);
+    }
+
+    let images = [];
+    let thumbnail = null;
+
+    // ✅ Add kept existing images
+    existingImagesToKeep.forEach(url => {
+      images.push({ originalUrl: url });
+    });
+
+    // ✅ Process NEW uploaded images
+    if (imageFiles.length > 0) {
+      console.log('📤 Processing new images:', imageFiles.length);
+
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i];
+
+        if (!file.buffer || file.buffer.length === 0) continue;
+
+        // Resize + watermark main image
+        let mainBuffer = await sharp(file.buffer)
+          .resize({ width: 1280, withoutEnlargement: true })
+          .jpeg({ quality: 80 })
+          .toBuffer();
+
+        if (fs.existsSync(watermarkPath)) {
+          const watermarkBuffer = await sharp(watermarkPath).resize(200).png().toBuffer();
+          mainBuffer = await sharp(mainBuffer)
+            .composite([{ input: watermarkBuffer, gravity: "southeast", blend: "overlay" }])
+            .toBuffer();
+        }
+
+        // Upload main image
+        const mainKey = `properties/${uuidv4()}-${Date.now()}-${i}-main.jpg`;
+        const mainResult = await s3.upload({
+          Bucket: BUCKET_NAME,
+          Key: mainKey,
+          Body: mainBuffer,
+          ContentType: "image/jpeg",
+        }).promise();
+
+        const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
+
+        // ✅ FIRST IMAGE = THUMBNAIL (only for first new image if no existing images)
+        if (i === 0 && images.length === 0) {
+          const thumbBuffer = await sharp(file.buffer)
+            .resize({ width: 300, withoutEnlargement: true })
+            .jpeg({ quality: 70 })
+            .toBuffer();
+
+          const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
+          const thumbResult = await s3.upload({
+            Bucket: BUCKET_NAME,
+            Key: thumbKey,
+            Body: thumbBuffer,
+            ContentType: "image/jpeg",
+          }).promise();
+
+          thumbnail = { url: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}` };
+        }
+
+        images.push({ originalUrl: mainUrl });
+      }
+    }
+
+    // ✅ Process thumbnail if sent separately
+    if (req.files && req.files.thumbnail && !thumbnail) {
+      const thumbFile = Array.isArray(req.files.thumbnail) ? req.files.thumbnail[0] : req.files.thumbnail;
+      
+      const thumbBuffer = await sharp(thumbFile.buffer)
+        .resize({ width: 300, withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+
+      const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
+      const thumbResult = await s3.upload({
+        Bucket: BUCKET_NAME,
+        Key: thumbKey,
+        Body: thumbBuffer,
+        ContentType: "image/jpeg",
+      }).promise();
+
+      thumbnail = { url: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}` };
+    }
+
+    // ✅ THUMBNAIL LOGIC: First image always becomes thumbnail
+    if (images.length > 0 && !thumbnail) {
+      // If we have existing images, use first one as thumbnail
+      if (existingImagesToKeep.length > 0) {
+        thumbnail = { url: existingImagesToKeep[0] };
+      }
+      // If we have new images and no thumbnail yet, use first new image
+      else if (images.length > 0) {
+        thumbnail = { url: images[0].originalUrl };
+      }
+    }
+
+    // Helper functions
+    const parseJSON = (field) => {
+      if (!req.body[field]) return undefined;
+      try {
+        let value = Array.isArray(req.body[field]) 
+          ? req.body[field][req.body[field].length - 1] 
+          : req.body[field];
+        return JSON.parse(value);
+      } catch {
+        return Array.isArray(req.body[field]) 
+          ? req.body[field][req.body[field].length - 1] 
+          : req.body[field];
+      }
+    };
+
+    const getValue = (field) => {
+      const value = req.body[field];
+      return Array.isArray(value) ? value[value.length - 1] : value;
+    };
+
+    // Parse location
+    let parsedLocation = existingRoom.location;
+    if (req.body.location) {
+      try {
+        let locationValue = Array.isArray(req.body.location)
+          ? req.body.location[req.body.location.length - 1]
+          : req.body.location;
+        parsedLocation = typeof locationValue === "string" 
+          ? JSON.parse(locationValue) 
+          : locationValue;
+      } catch (error) {
+        console.log('Location parse error, keeping existing:', error);
+      }
+    }
+
+    // Prepare update data
+    const updateData = {
+      category: getValue("category") || existingRoom.category,
+      title: getValue("title") || existingRoom.title,
+      description: getValue("description") || existingRoom.description,
+      images: images.length > 0 ? images : existingRoom.images,
+      thumbnail: thumbnail || existingRoom.thumbnail,
+      location: parsedLocation,
+      contactPhone: getValue("contactPhone") || existingRoom.contactPhone,
+      showPhonePublic: getValue("showPhonePublic") === "true" || existingRoom.showPhonePublic,
+      monthlyRent: getValue("monthlyRent") || existingRoom.monthlyRent,
+      priceRange: parseJSON("priceRange") || existingRoom.priceRange,
+      securityDeposit: getValue("securityDeposit") || existingRoom.securityDeposit,
+      roommatesWanted: getValue("roommatesWanted") || existingRoom.roommatesWanted,
+      genderPreference: getValue("genderPreference") || existingRoom.genderPreference,
+      habitPreferences: parseJSON("habitPreferences") || existingRoom.habitPreferences,
+      purpose: parseJSON("purpose") || existingRoom.purpose,
+      availableSpace: getValue("availableSpace") || existingRoom.availableSpace,
+      pgGenderCategory: getValue("pgGenderCategory") || existingRoom.pgGenderCategory,
+      roomTypesAvailable: parseJSON("roomTypesAvailable") || existingRoom.roomTypesAvailable,
+    mealsProvided: parseJSON("mealsProvided") || existingRoom.mealsProvided,
+      amenities: parseJSON("amenities") || existingRoom.amenities,
+      rules: parseJSON("rules") || existingRoom.rules,
+      propertyType: getValue("propertyType") || existingRoom.propertyType,
+      furnishedStatus: getValue("furnishedStatus") || existingRoom.furnishedStatus,
+      squareFeet: getValue("squareFeet") || existingRoom.squareFeet,
+      bedrooms: getValue("bedrooms") || existingRoom.bedrooms,
+      bathrooms: getValue("bathrooms") || existingRoom.bathrooms,
+      balconies: getValue("balconies") || existingRoom.balconies,
+      floorNumber: getValue("floorNumber") || existingRoom.floorNumber,
+      totalFloors: getValue("totalFloors") || existingRoom.totalFloors,
+      tenantPreference: getValue("tenantPreference") || existingRoom.tenantPreference,
+      parking: getValue("parking") || existingRoom.parking,
+      updatedAt: new Date()
+    };
+
+    // Remove undefined fields
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] === undefined) {
+        delete updateData[key];
+      }
+    });
+
+    // Update room
+    const updatedRoom = await Room.findByIdAndUpdate(
+      roomId,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('createdBy', 'name picture');
+
+    console.log(`✅ ROOM UPDATED: ${roomId} with ${images.length} images`);
+
+    res.json({
+      success: true,
+      message: 'Room updated successfully',
+      room: {
+        ...updatedRoom.toObject(),
+        imageCount: updatedRoom.images.length,
+        hasThumbnail: !!updatedRoom.thumbnail,
+      },
+    });
+
+  } catch (error) {
+    console.error("❌ Update Room Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update room",
+      error: error.message,
+    });
+  }
+};
+
+// ✅ SAFE DELETE FUNCTION
+const safelyDeleteImagesFromS3 = async (imagesToDelete, roomId) => {
+  try {
+    for (const image of imagesToDelete) {
+      const imageUrl = image.originalUrl;
+      
+      // Check if any other room is using this image
+      const otherRoomsUsingImage = await Room.countDocuments({
+        'images.originalUrl': imageUrl,
+        _id: { $ne: roomId }
+      });
+
+      // Only delete if NO other rooms are using this image
+      if (otherRoomsUsingImage === 0) {
+        console.log(`🗑️ Deleting unused image: ${imageUrl}`);
+        try {
+          await deleteImageFromS3ByUrl(imageUrl);
+          console.log(`✅ Successfully deleted: ${imageUrl}`);
+        } catch (deleteError) {
+          console.error(`❌ Failed to delete ${imageUrl}:`, deleteError.message);
+          continue;
+        }
+      } else {
+        console.log(`🔒 Keeping image (used by ${otherRoomsUsingImage} other rooms): ${imageUrl}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error in safe image deletion:', error);
+  }
+};
+
+// Helper to delete image from S3 by URL
+const deleteImageFromS3ByUrl = async (imageUrl) => {
+  try {
+    const key = imageUrl.split('.amazonaws.com/')[1];
+    await s3.deleteObject({
+      Bucket: BUCKET_NAME,
+      Key: key
+    }).promise();
+    console.log(`✅ Deleted from S3: ${key}`);
+  } catch (error) {
+    console.error('❌ Failed to delete from S3:', imageUrl, error);
+  }
+};
 
 
 
@@ -385,76 +702,320 @@ export const getRoomById = async (req, res) => {
 };
 
 
-// Get all rooms
-// export const getAllRooms = async (req, res) => {
-//   try {
-//     const rooms = await Room.find({status:"active"});
-//     if(!rooms || rooms.length === 0){
-//       res.status(404).json({message:"No active rooms found "})
-//     }
-//     res.status(200).json({roomData:rooms})
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
+export const incrementRoomView = async (req, res) => {
+  console.log("Increment Room View Controller Hit");
+  
+  try {
+    const { roomId } = req.params; // roomId from URL params
+    const { userId } = req.body;   // userId from request body
+   
+    const room = await Room.findById(roomId);
 
-// Get room by ID
-// export const getRoomById = async (req, res) => {
-//   try {
-//     const room = await Room.findById(req.params.id).populate("createdBy", "name picture");
-//     if (!room) return res.status(404).json({ success: false, message: "Room not found" });
+    if (!room) {
+      return res.status(404).json({ success: false, message: "Room not found" });
+    }
 
-//     // count view
-//     room.views += 1;
-//     if (req.user) {
-//       if (!room.viewedBy.includes(req.user.id)) {
-//         room.viewedBy.push(req.user.id);
-//       }
-//     }
-//     await room.save();
+    // ✅ Only increment if user hasn't viewed before
+    if (userId && !room.viewedBy.includes(userId)) {
+      room.views += 1;
+      room.viewedBy.push(userId);
+      await room.save();
+    }
 
-//     res.json({ success: true, room });
-//   } catch (err) {
-//     console.error("Get Room Error:", err);
-//     res.status(500).json({ success: false, message: "Failed to fetch room" });
-//   }
-// };
-// Update room by ID
+    // ✅ If user is not logged in, you can still increment view (optional)
+    if (!userId) {
+      room.views += 1;
+      await room.save();
+    }
 
-// export const updateRoom = async (req, res) => {
-//   try {
-//     const room = await Room.findById(req.params.id);
+    res.status(200).json({
+      success: true,
+      message: "View count updated",
+      views: room.views,
+    });
+  } catch (error) {
+    console.error("❌ Error incrementing room view:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
-//     if (!room) return res.status(404).json({ success: false, message: "Room not found" });
-//     if (room.createdBy.toString() !== req.user.id) {
-//       return res.status(403).json({ success: false, message: "Not authorized" });
-//     }
+export const addFavorite = async (req, res) => {
+  try {
+    const { roomId } = req.body;
+    const userId = req.user._id;
 
-//     Object.assign(room, req.body); // update only passed fields
-//     await room.save();
+    console.log(`❤️ ADD FAVORITE: User ${userId} → Room ${roomId}`);
 
-//     res.json({ success: true, room });
-//   } catch (err) {
-//     console.error("Update Room Error:", err);
-//     res.status(500).json({ success: false, message: "Failed to update room" });
-//   }
-// };
+    // Validation
+    if (!roomId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Room ID is required' 
+      });
+    }
 
+    // Check if room exists
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Room not found' 
+      });
+    }
 
-// Delete room by ID
-// export const deleteRoom = async (req, res) => {
-//   try {
-//     const room = await Room.findById(req.params.id);
+    // Check if already favorited
+    if (room.favorites.includes(userId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Room already in favorites' 
+      });
+    }
 
-//     if (!room) return res.status(404).json({ success: false, message: "Room not found" });
-//     if (room.createdBy.toString() !== req.user.id) {
-//       return res.status(403).json({ success: false, message: "Not authorized" });
-//     }
+    // Add user to favorites array
+    room.favorites.push(userId);
+    await room.save();
 
-//     await room.deleteOne();
-//     res.json({ success: true, message: "Room deleted successfully" });
-//   } catch (err) {
-//     console.error("Delete Room Error:", err);
-//     res.status(500).json({ success: false, message: "Failed to delete room" });
-//   }
-// };
+    console.log(`✅ FAVORITE ADDED to room: ${roomId}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Room added to favorites successfully',
+      roomId: roomId,
+      isFavorited: true
+    });
+
+  } catch (error) {
+    console.error('❌ Error adding favorite:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to add favorite', 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ REMOVE FROM FAVORITES
+export const removeFavorite = async (req, res) => {
+  try {
+    const { roomId } = req.body;
+    const userId = req.user._id;
+
+    console.log(`🗑️ REMOVE FAVORITE: User ${userId} → Room ${roomId}`);
+
+    // Validation
+    if (!roomId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Room ID is required' 
+      });
+    }
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Room not found' 
+      });
+    }
+
+    // Check if actually favorited
+    if (!room.favorites.includes(userId)) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Room not in favorites' 
+      });
+    }
+
+    // Remove user from favorites array
+    room.favorites = room.favorites.filter(favId => !favId.equals(userId));
+    await room.save();
+
+    console.log(`✅ FAVORITE REMOVED from room: ${roomId}`);
+
+    res.json({
+      success: true,
+      message: 'Room removed from favorites successfully',
+      roomId: roomId,
+      isFavorited: false
+    });
+
+  } catch (error) {
+    console.error('❌ Error removing favorite:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to remove favorite', 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ TOGGLE FAVORITE (Add/Remove in one endpoint)
+export const toggleFavorite = async (req, res) => {
+  try {
+    const { roomId } = req.body;
+    const userId = req.user._id;
+
+    console.log(`🔄 TOGGLE FAVORITE: User ${userId} → Room ${roomId}`);
+
+    if (!roomId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Room ID is required' 
+      });
+    }
+
+    // Check if room exists
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Room not found' 
+      });
+    }
+
+    const isCurrentlyFavorited = room.favorites.includes(userId);
+    let action = '';
+
+    if (isCurrentlyFavorited) {
+      // Remove from favorites
+      room.favorites = room.favorites.filter(favId => !favId.equals(userId));
+      action = 'removed';
+      console.log(`✅ FAVORITE REMOVED: ${roomId}`);
+    } else {
+      // Add to favorites
+      room.favorites.push(userId);
+      action = 'added';
+      console.log(`✅ FAVORITE ADDED: ${roomId}`);
+    }
+
+    await room.save();
+
+    res.json({
+      success: true,
+      message: `Room ${action} from favorites successfully`,
+      isFavorited: !isCurrentlyFavorited,
+      roomId: roomId
+    });
+
+  } catch (error) {
+    console.error('❌ Error toggling favorite:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to toggle favorite', 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ GET USER'S FAVORITES
+export const getMyFavorites = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    console.log(`📚 GET FAVORITES: User ${userId} - Page ${page}`);
+
+    // Find rooms where user ID is in favorites array
+    const favoriteRooms = await Room.find({ 
+      favorites: userId,
+      isActive: true,
+      isBlocked: false 
+    })
+      .populate('createdBy', 'name picture')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Room.countDocuments({ 
+      favorites: userId,
+      isActive: true,
+      isBlocked: false 
+    });
+
+    console.log(`✅ FAVORITES FETCHED: ${favoriteRooms.length} rooms`);
+
+    res.json({
+      success: true,
+      favorites: favoriteRooms,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching favorites:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch favorites', 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ CHECK IF ROOM IS FAVORITED
+export const checkFavorite = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user._id;
+
+    console.log(`🔍 CHECK FAVORITE: User ${userId} → Room ${roomId}`);
+
+    const room = await Room.findOne({
+      _id: roomId,
+      favorites: userId
+    });
+
+    const isFavorited = !!room;
+
+    console.log(`✅ FAVORITE STATUS: ${isFavorited}`);
+
+    res.json({
+      success: true,
+      isFavorited
+    });
+
+  } catch (error) {
+    console.error('❌ Error checking favorite:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to check favorite status', 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ GET FAVORITE COUNT FOR A ROOM
+export const getFavoriteCount = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Room not found' 
+      });
+    }
+
+    const count = room.favorites.length;
+
+    res.json({
+      success: true,
+      count,
+      roomId
+    });
+
+  } catch (error) {
+    console.error('❌ Error counting favorites:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to get favorite count', 
+      error: error.message 
+    });
+  }
+};

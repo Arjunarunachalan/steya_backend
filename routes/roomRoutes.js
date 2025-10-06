@@ -1,9 +1,9 @@
 // backend/routes/rooms.js
 import express from "express";
 import multer from "multer";
-import { getRoomById, getRooms, uploadRooms } from "../controllers/roomController.js";
+import { addFavorite, checkFavorite, getFavoriteCount, getMyFavorites, getRoomById, getRooms, removeFavorite, toggleFavorite, updateRoom, uploadRooms } from "../controllers/roomController.js";
 import { authMiddleware } from "../middlewares/authMiddleware.js";
-
+import { incrementRoomView } from "../controllers/roomController.js";
 const router = express.Router();
 
 // Use memory storage for files
@@ -19,22 +19,33 @@ router.post("/rooms",authMiddleware,upload.fields([
 router.get("/getrooms", getRooms);
 
 router.get("/singleroom/:id", getRoomById);
+router.post("/:roomId/view", incrementRoomView);
+
+router.post('/add', authMiddleware, addFavorite);
+
+// ✅ REMOVE FROM FAVORITES
+router.delete('/remove', authMiddleware, removeFavorite);
+
+router.put('/update/:roomId', authMiddleware,upload.fields([
+  { name: 'images', maxCount: 10 },
+  { name: 'thumbnail', maxCount: 1 }
+]), updateRoom);
+
+
+// ✅ TOGGLE FAVORITE (Add/Remove in one endpoint)
+router.post('/toggle', authMiddleware, toggleFavorite);
+
+// ✅ GET USER'S FAVORITES
+router.get('/my-favorites', authMiddleware, getMyFavorites);
+
+// ✅ CHECK IF ROOM IS FAVORITED
+router.get('/check/:roomId', authMiddleware, checkFavorite);
+
+// ✅ GET FAVORITE COUNT FOR A ROOM
+router.get('/count/:roomId', getFavoriteCount);
+
+
 
 export default router;
 
 
-
-
-// // Get all rooms
-// router.get('/', getAllRooms);
-
-// // Get a specific room by ID
-// router.get('/:id', getRoomById);
-
-// // Update a room by ID
-// router.put('/:id', updateRoomById);
-
-// // Delete a room by ID
-// router.delete('/:id', deleteRoomById);
-
-// export default router;

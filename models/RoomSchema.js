@@ -75,6 +75,7 @@ const roomSchema = new mongoose.Schema({
 
   // ===== Engagement =====
   views: { type: Number, default: 0 },
+viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
@@ -112,3 +113,4 @@ roomSchema.pre("validate", function(next) {
 
 const Room = mongoose.model("Room", roomSchema);
 export default Room;
+    
