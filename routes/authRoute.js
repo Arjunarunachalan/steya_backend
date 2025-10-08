@@ -11,7 +11,7 @@ router.get("/test", (req, res) => {
   res.json({ success: true, message: "Backend is working 🚀" });
 });
 
-router.put("/update-location",updateLocation );
+router.put("/update-location",authMiddleware,updateLocation );
 
 router.post("/refresh",refreshAccessToken );
 

@@ -640,10 +640,21 @@ const deleteImageFromS3ByUrl = async (imageUrl) => {
 
 
 
+// controllers/roomController.js
 
+
+// controllers/roomController.js
 export const getRooms = async (req, res) => {
   try {
-    const { category, lat, lng, limit = 15, min = 0, max = 5000 } = req.query; // meters
+    const { 
+      category, 
+      lat, 
+      lng, 
+      limit = 15, 
+      min = 0, 
+      max = 5000,
+      filters 
+    } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({ success: false, message: "lat & lng required" });
@@ -652,33 +663,183 @@ export const getRooms = async (req, res) => {
     const latNum = parseFloat(lat);
     const lngNum = parseFloat(lng);
 
-    const matchStage = {};
-    if (category) matchStage.category = category;
+    // Build base match stage with location
+    const baseMatchStage = {
+      $and: [
+        {
+          $or: [
+            { location: { $exists: true, $ne: null } },
+            { 'location.coordinates': { $exists: true, $ne: null } }
+          ]
+        }
+      ]
+    };
 
-    const rooms = await Room.aggregate([
+    // Add category to base match if provided
+    if (category && category !== 'all') {
+      baseMatchStage.$and.push({ category });
+    }
+
+    // Parse and apply filters if provided
+    let filterMatchStage = {};
+    if (filters && filters !== '{}') {
+      try {
+        const filterData = JSON.parse(filters);
+        const filterQuery = buildFilterQuery(filterData, category);
+        
+        // Only add filter query if it has valid conditions
+        if (Object.keys(filterQuery).length > 0) {
+          Object.assign(filterMatchStage, filterQuery);
+        }
+      } catch (parseError) {
+        console.error("Filter parsing error:", parseError);
+        return res.status(400).json({ success: false, message: "Invalid filter format" });
+      }
+    }
+
+    // Combine base match with filter match
+    const finalMatchStage = { ...baseMatchStage };
+    if (Object.keys(filterMatchStage).length > 0) {
+      finalMatchStage.$and.push(filterMatchStage);
+    }
+
+    // If no $and conditions remain, remove $and
+    if (finalMatchStage.$and && finalMatchStage.$and.length === 0) {
+      delete finalMatchStage.$and;
+    }
+
+    const aggregationPipeline = [
       {
-      $geoNear: {
-  near: { type: "Point", coordinates: [lngNum, latNum] },
-  distanceField: "distance",
-  spherical: true,
-  minDistance: parseInt(min) || 0,
-  maxDistance: parseInt(max),
-}
+        $geoNear: {
+          near: { type: "Point", coordinates: [lngNum, latNum] },
+          distanceField: "distance",
+          spherical: true,
+          distanceMultiplier: 0.001, // Convert to kilometers
+          query: finalMatchStage.$and && finalMatchStage.$and.length > 0 ? finalMatchStage : {},
+          minDistance: parseInt(min) || 0,
+          maxDistance: parseInt(max) || 50000,
+        }
       },
-      { $match: matchStage },
       { $sort: { distance: 1 } },
       { $limit: parseInt(limit) },
-    ]);
+    ];
 
-    res.json({ success: true, rooms });
+    console.log('Final aggregation pipeline:', JSON.stringify(aggregationPipeline, null, 2));
+    const rooms = await Room.aggregate(aggregationPipeline);
+    
+    res.json({ 
+      success: true, 
+      rooms,
+      message: `Found ${rooms.length} rooms`
+    });
   } catch (err) {
     console.error("Get Rooms Error:", err);
     res.status(500).json({ success: false, message: "Failed to fetch rooms" });
   }
 };
 
+// Helper function to build filter queries based on category
+function buildFilterQuery(filterData, category) {
+  const query = {};
+  
+  Object.keys(filterData).forEach(key => {
+    const filter = filterData[key];
+    
+    // Skip if filter is not selected or has no value
+    if (!filter.selected) return;
+    
+    let filterQuery = null;
 
-//single room controller
+    if (category === 'shared') {
+      filterQuery = buildSharedFilter(key, filter);
+    } else if (category === 'pg_hostel') {
+      filterQuery = buildPgFilter(key, filter);
+    } else if (category === 'flat_home') {
+      filterQuery = buildRentalFilter(key, filter);
+    }
+
+    if (filterQuery) {
+      query[key] = filterQuery;
+    }
+  });
+  
+  console.log('Built filter query:', query);
+  return query;
+}
+
+function buildSharedFilter(key, filter) {
+  switch (key) {
+    case 'monthlyRent':
+    case 'roommatesWanted':
+      return { 
+        $gte: filter.currentMin || filter.min, 
+        $lte: filter.currentMax || filter.max 
+      };
+    case 'genderPreference':
+    case 'habitPreferences':
+    case 'purpose':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.label);
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    case 'showPhonePublic':
+      return filter.value === true;
+    default:
+      return null;
+  }
+}
+
+function buildPgFilter(key, filter) {
+  switch (key) {
+    case 'priceRange':
+      return { 
+        $gte: filter.currentMin || filter.min, 
+        $lte: filter.currentMax || filter.max 
+      };
+    case 'pgGenderCategory':
+    case 'roomTypesAvailable':
+    case 'mealsProvided':
+    case 'rules':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.label);
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+function buildRentalFilter(key, filter) {
+  switch (key) {
+    case 'monthlyRent':
+    case 'securityDeposit':
+    case 'squareFeet':
+    case 'bedrooms':
+    case 'bathrooms':
+      return { 
+        $gte: filter.currentMin || filter.min, 
+        $lte: filter.currentMax || filter.max 
+      };
+    case 'propertyType':
+    case 'furnishedStatus':
+    case 'preferredTenant':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.label);
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
 
 // GET /api/rooms/:id
 export const getRoomById = async (req, res) => {

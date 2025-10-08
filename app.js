@@ -11,7 +11,8 @@ import pushTokenRoutes from './routes/pushTokenRoutes.js';
 
 import reportRoutes from './routes/reportRoutes.js';
 import myPostsRoutes from './routes/myPosts.js';
-
+import donationRoutes from './routes/donationRoutes.js';
+import bugRoutes from './routes/bugRoutes.js';  
 // Use the routes
 // Middleware
 app.use(cors());
@@ -26,6 +27,8 @@ app.use('/api/push', pushTokenRoutes);
 
 app.use('/api/reports', reportRoutes);
 app.use('/api/posts', myPostsRoutes);
+app.use('/api', donationRoutes);
+app.use('/api/bug', bugRoutes);
 
 
 export default app;
