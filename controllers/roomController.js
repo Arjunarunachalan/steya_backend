@@ -651,8 +651,7 @@ export const getRooms = async (req, res) => {
       lat, 
       lng, 
       limit = 15, 
-      min = 0, 
-      max = 5000,
+      skip = 0,
       filters 
     } = req.query;
 
@@ -716,21 +715,54 @@ export const getRooms = async (req, res) => {
           spherical: true,
           distanceMultiplier: 0.001, // Convert to kilometers
           query: finalMatchStage.$and && finalMatchStage.$and.length > 0 ? finalMatchStage : {},
-          minDistance: parseInt(min) || 0,
-          maxDistance: parseInt(max) || 50000,
+          maxDistance: 45000, // 45 km max search radius
         }
       },
-      { $sort: { distance: 1 } },
+      { 
+        $sort: { 
+          distance: 1, // Nearest first
+          createdAt: -1 // Then by latest posts
+        } 
+      },
+      { $skip: parseInt(skip) },
       { $limit: parseInt(limit) },
     ];
 
     console.log('Final aggregation pipeline:', JSON.stringify(aggregationPipeline, null, 2));
     const rooms = await Room.aggregate(aggregationPipeline);
     
+    // Add distance info to each room
+    const roomsWithDistanceInfo = rooms.map(room => {
+      const straightLineDistance = room.distance; // in km
+      
+      // Calculate approximate road distance (straight-line * 1.4)
+      const approximateRoadDistanceKm = straightLineDistance * 1.4;
+      
+      let individualDistance;
+      let approximateRoadDistance;
+      
+      // If less than 1 km, show in meters
+      if (approximateRoadDistanceKm < 1) {
+        approximateRoadDistance = Math.round(approximateRoadDistanceKm * 1000); // Convert to meters
+        individualDistance = `${approximateRoadDistance} m`;
+      } else {
+        approximateRoadDistance = Math.round(approximateRoadDistanceKm);
+        individualDistance = `${approximateRoadDistance} km`;
+      }
+      
+      return {
+        ...room,
+        approximateRoadDistance: approximateRoadDistance,
+        individualDistance: individualDistance,
+        distanceLabel: `${individualDistance} away`
+      };
+    });
+    
     res.json({ 
       success: true, 
-      rooms,
-      message: `Found ${rooms.length} rooms`
+      rooms: roomsWithDistanceInfo,
+      message: `Found ${rooms.length} rooms`,
+      hasMore: rooms.length === parseInt(limit)
     });
   } catch (err) {
     console.error("Get Rooms Error:", err);
