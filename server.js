@@ -42,6 +42,40 @@ const cleanupOldMessages = () => {
 
 setInterval(cleanupOldMessages, 60000);
 
+// FIXED: Enhanced online status broadcasting function
+const broadcastOnlineStatus = async (roomId, excludedSocketId = null) => {
+  try {
+    const roomIdStr = roomId.toString();
+    const room = await ChatRoom.findById(roomIdStr).populate('participants', '_id');
+    if (!room) {
+      console.warn(`⚠️ Room ${roomIdStr} not found for status broadcast`);
+      return;
+    }
+
+    const onlineStatuses = {};
+    for (const participant of room.participants) {
+      const participantId = participant._id.toString();
+      onlineStatuses[participantId] = onlineUsers.has(participantId);
+    }
+
+    console.log(`📢 Broadcasting online status for room ${roomIdStr}:`, onlineStatuses);
+    
+    if (excludedSocketId) {
+      io.to(roomIdStr).except(excludedSocketId).emit('onlineStatuses', { 
+        roomId: roomIdStr, 
+        statuses: onlineStatuses 
+      });
+    } else {
+      io.to(roomIdStr).emit('onlineStatuses', { 
+        roomId: roomIdStr, 
+        statuses: onlineStatuses 
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error broadcasting online status:', error);
+  }
+};
+
 io.use((socket, next) => {
   console.log(`🔄 Incoming connection from:`, socket.handshake.address);
   next();
@@ -61,7 +95,7 @@ io.on('connection', (socket) => {
     console.log(`👤 User ${userIdStr} app is online (socket: ${socket.id})`);
   });
 
-  // FIXED: joinRoom with proper event ordering
+  // FIXED: joinRoom with proper event ordering and status broadcasting
   socket.on('joinRoom', async ({ roomId, userId }) => {
     console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
 
@@ -125,15 +159,10 @@ io.on('connection', (socket) => {
       const onlineStatuses = {};
       for (const participant of chatRoom.participants) {
         const participantId = participant._id.toString();
-        
-        if (participantId === userIdStr) {
-          onlineStatuses[participantId] = true;
-        } else {
-          onlineStatuses[participantId] = onlineUsers.has(participantId);
-        }
+        onlineStatuses[participantId] = onlineUsers.has(participantId);
       }
 
-      console.log('📊 Sending online statuses to client:', onlineStatuses);
+      console.log('📊 Sending initial online statuses to client:', onlineStatuses);
 
       // ✅ SEND initialData FIRST
       socket.emit('initialData', {
@@ -156,11 +185,9 @@ io.on('connection', (socket) => {
       });
 
       // ✅ Broadcast online status to others AFTER initialData sent
-      socket.to(roomIdStr).emit('userStatusUpdate', {
-        userId: userIdStr,
-        isOnline: true,
-        timestamp: new Date()
-      });
+      setTimeout(() => {
+        broadcastOnlineStatus(roomIdStr, socket.id);
+      }, 100);
 
       console.log(`📢 User ${userIdStr} joined room ${roomIdStr}. Online status: true`);
 
@@ -355,11 +382,6 @@ io.on('connection', (socket) => {
       const roomIdStr = roomId.toString();
       const userIdStr = userId.toString();
       
-      if (!socket.rooms.has(roomIdStr)) {
-        console.warn(`⚠️ User ${userIdStr} not in room ${roomIdStr}`);
-        return;
-      }
-
       const room = await ChatRoom.findById(roomIdStr).populate('participants', '_id');
       if (!room) {
         console.warn(`⚠️ Room ${roomIdStr} not found`);
@@ -369,12 +391,7 @@ io.on('connection', (socket) => {
       const onlineStatuses = {};
       for (const participant of room.participants) {
         const participantId = participant._id.toString();
-        
-        if (participantId === userIdStr) {
-          onlineStatuses[participantId] = true;
-        } else {
-          onlineStatuses[participantId] = onlineUsers.has(participantId);
-        }
+        onlineStatuses[participantId] = onlineUsers.has(participantId);
       }
 
       console.log(`📊 Sending online statuses for room ${roomIdStr}:`, onlineStatuses);
@@ -422,11 +439,10 @@ io.on('connection', (socket) => {
         }
       }
 
-      socket.to(roomIdStr).emit('userStatusUpdate', {
-        userId: userIdStr,
-        isOnline: false,
-        timestamp: new Date()
-      });
+      // Broadcast status update when user leaves room
+      setTimeout(() => {
+        broadcastOnlineStatus(roomIdStr);
+      }, 100);
     }
     
     socket.leave(roomId);
@@ -444,12 +460,10 @@ io.on('connection', (socket) => {
       if (userRooms.has(disconnectedUserId)) {
         const rooms = userRooms.get(disconnectedUserId);
         rooms.forEach(roomId => {
-          io.to(roomId).emit('userStatusUpdate', {
-            userId: disconnectedUserId,
-            isOnline: false,
-            timestamp: new Date()
-          });
-          console.log(`📢 Notified room ${roomId} that user ${disconnectedUserId} went offline`);
+          // Broadcast status update after a short delay
+          setTimeout(() => {
+            broadcastOnlineStatus(roomId);
+          }, 100);
         });
         userRooms.delete(disconnectedUserId);
       }
