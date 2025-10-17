@@ -402,6 +402,87 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Add this socket event handler to your server.js file
+// Place it with your other socket.on() handlers
+
+socket.on('deleteMessage', async ({ roomId, messageId, userId }) => {
+  console.log(`🗑️ DELETE MESSAGE REQUEST:`, {
+    room: roomId,
+    message: messageId,
+    user: userId
+  });
+
+  try {
+    // Validation
+    if (!roomId || !messageId || !userId) {
+      socket.emit('error', { message: 'Missing required fields for deletion' });
+      return;
+    }
+
+    // Find the chat
+    const chat = await Chat.findOne({ roomId });
+    if (!chat) {
+      socket.emit('error', { message: 'Chat not found' });
+      return;
+    }
+
+    // Find the message
+    const message = chat.messages.id(messageId);
+    if (!message) {
+      socket.emit('error', { message: 'Message not found' });
+      return;
+    }
+
+    // Authorization check - only message sender can delete
+    if (message.sender.toString() !== userId.toString()) {
+      socket.emit('error', { message: 'Unauthorized: You can only delete your own messages' });
+      return;
+    }
+
+    // Remove the message
+    message.deleteOne();
+    await chat.save();
+
+    // Update room's last message if this was the last message
+    const room = await ChatRoom.findById(roomId);
+    if (room && room.lastMessage) {
+      const lastMessage = chat.messages[chat.messages.length - 1];
+      if (lastMessage) {
+        const updateData = {
+          lastMessage: lastMessage.messageType === 'freetext' 
+            ? lastMessage.text 
+            : lastMessage.option,
+          updatedAt: new Date()
+        };
+        await ChatRoom.findByIdAndUpdate(roomId, updateData);
+      } else {
+        // No messages left
+        await ChatRoom.findByIdAndUpdate(roomId, {
+          lastMessage: null,
+          updatedAt: new Date()
+        });
+      }
+    }
+
+    // Broadcast deletion to all users in the room
+    io.in(roomId).emit('messageDeleted', {
+      messageId,
+      roomId,
+      deletedBy: userId,
+      timestamp: new Date()
+    });
+
+    console.log(`✅ Message ${messageId} deleted successfully`);
+
+  } catch (error) {
+    console.error('❌ Error deleting message:', error);
+    socket.emit('error', { 
+      message: 'Failed to delete message', 
+      error: error.message 
+    });
+  }
+});
+
   socket.on('messageStatus', async ({ roomId, messageId, status }) => {
     try {
       const chat = await Chat.findOne({ roomId });
