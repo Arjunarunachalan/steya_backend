@@ -1,4 +1,4 @@
-// server.js - ENHANCED WITH PROPER ONLINE INDICATOR
+// server.js - FIXED ONLINE/OFFLINE STATUS SYSTEM
 import http from 'http';
 import { Server } from 'socket.io';
 import app from './app.js';
@@ -21,11 +21,11 @@ const io = new Server(server, {
 });
 
 const onlineUsers = new Map();
-const userRooms = new Map(); // Track which rooms users are in
-const userSockets = new Map(); // Track socketId -> userId mapping
+const userRooms = new Map();
+const userSockets = new Map();
 
 // Rate limiting
-const MESSAGE_RATE_LIMIT = 10; // messages per minute
+const MESSAGE_RATE_LIMIT = 10;
 const userMessageCounts = new Map();
 
 const cleanupOldMessages = () => {
@@ -40,7 +40,6 @@ const cleanupOldMessages = () => {
   }
 };
 
-// Cleanup every minute
 setInterval(cleanupOldMessages, 60000);
 
 io.use((socket, next) => {
@@ -51,6 +50,7 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   console.log('✅ User connected', socket.id, 'at', new Date().toISOString());
 
+  // SIMPLIFIED: userOnline only for app-level presence (optional)
   socket.on('userOnline', ({ userId }) => {
     if (!userId) return;
     
@@ -58,22 +58,10 @@ io.on('connection', (socket) => {
     onlineUsers.set(userIdStr, socket.id);
     userSockets.set(socket.id, userIdStr);
     
-    console.log(`👤 User ${userIdStr} is online (socket: ${socket.id})`);
-    
-    // Notify all rooms this user is in about their online status
-    if (userRooms.has(userIdStr)) {
-      const rooms = userRooms.get(userIdStr);
-      rooms.forEach(roomId => {
-        socket.to(roomId).emit('userStatusUpdate', {
-          userId: userIdStr,
-          isOnline: true,
-          timestamp: new Date()
-        });
-        console.log(`📢 Notified room ${roomId} that user ${userIdStr} is online`);
-      });
-    }
+    console.log(`👤 User ${userIdStr} app is online (socket: ${socket.id})`);
   });
 
+  // FIXED: joinRoom with proper event ordering
   socket.on('joinRoom', async ({ roomId, userId }) => {
     console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
 
@@ -93,7 +81,7 @@ io.on('connection', (socket) => {
     }
     userRooms.get(userIdStr).add(roomIdStr);
 
-    // Also track socket connection - MARK USER AS ONLINE
+    // Mark user as ONLINE
     onlineUsers.set(userIdStr, socket.id);
     userSockets.set(socket.id, userIdStr);
 
@@ -133,12 +121,11 @@ io.on('connection', (socket) => {
         }
       }
 
-      // FIXED: Get online statuses for all participants - CURRENT USER SHOULD BE TRUE
+      // Build online statuses - current user ALWAYS true
       const onlineStatuses = {};
       for (const participant of chatRoom.participants) {
         const participantId = participant._id.toString();
         
-        // FIX: Current user should always be true, others check onlineUsers
         if (participantId === userIdStr) {
           onlineStatuses[participantId] = true;
         } else {
@@ -148,6 +135,7 @@ io.on('connection', (socket) => {
 
       console.log('📊 Sending online statuses to client:', onlineStatuses);
 
+      // ✅ SEND initialData FIRST
       socket.emit('initialData', {
         messages,
         currentState,
@@ -160,14 +148,14 @@ io.on('connection', (socket) => {
         onlineStatuses
       });
 
-      // Notify others in the room that this user joined
+      // ✅ THEN notify others (after client is ready)
       socket.to(roomIdStr).emit('userJoinedRoom', {
         userId: userIdStr,
         userInfo: chatRoom.participants.find(p => p._id.toString() === userIdStr),
         timestamp: new Date()
       });
 
-      // Broadcast online status to other room participants
+      // ✅ Broadcast online status to others AFTER initialData sent
       socket.to(roomIdStr).emit('userStatusUpdate', {
         userId: userIdStr,
         isOnline: true,
@@ -201,13 +189,12 @@ io.on('connection', (socket) => {
     });
 
     try {
-      // Enhanced validation
       if (!roomId || !sender || !senderRole) {
         socket.emit('error', { message: 'Missing required fields' });
         return;
       }
 
-      // Rate limiting check
+      // Rate limiting
       const now = Date.now();
       const userMessages = userMessageCounts.get(sender.toString()) || [];
       const recentMessages = userMessages.filter(time => now - time < 60000);
@@ -217,13 +204,11 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // For option messages, require optionId and optionText
       if (messageType === 'option' && (!optionId || !optionText)) {
         socket.emit('error', { message: 'Option messages require optionId and optionText' });
         return;
       }
 
-      // For freetext messages, require text and validate length
       if (messageType === 'freetext') {
         if (!text) {
           socket.emit('error', { message: 'Freetext messages require text' });
@@ -241,7 +226,6 @@ io.on('connection', (socket) => {
 
       const senderUser = await User.findById(sender).select('name picture');
       
-      // Update room status
       const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
       if (room) {
         const updateData = {
@@ -258,7 +242,6 @@ io.on('connection', (socket) => {
         await ChatRoom.findByIdAndUpdate(roomId, updateData);
       }
 
-      // Save message to database
       let chat = await Chat.findOne({ roomId });
       if (!chat) {
         chat = new Chat({ 
@@ -276,30 +259,26 @@ io.on('connection', (socket) => {
         createdAt: new Date()
       };
 
-      // Add type-specific fields
       if (messageType === 'option') {
         newMessage.optionId = optionId;
         newMessage.option = optionText;
         newMessage.nextState = nextState;
       } else if (messageType === 'freetext') {
         newMessage.text = text;
-        newMessage.nextState = chat.currentState; // Keep current state for freetext
+        newMessage.nextState = chat.currentState;
       }
 
       chat.messages.push(newMessage);
       
-      // Update conversation state if it changed
       if (nextState && messageType === 'option') {
         chat.currentState = nextState;
       }
       
       await chat.save();
 
-      // Update rate limiting
       recentMessages.push(now);
       userMessageCounts.set(sender.toString(), recentMessages);
 
-      // Broadcast to room
       const broadcastData = {
         message: {
           sender: newMessage.sender,
@@ -316,7 +295,7 @@ io.on('connection', (socket) => {
 
       io.in(roomId).emit('newMessage', broadcastData);
 
-      // Enhanced push notifications
+      // Push notifications
       if (room && room.participants) {
         for (const participant of room.participants) {
           if (participant._id.toString() === sender.toString()) continue;
@@ -365,32 +344,47 @@ io.on('connection', (socket) => {
     }
   });
 
-  // FIXED: Online status requests
+  // FIXED: getOnlineStatus with validation
   socket.on('getOnlineStatus', async ({ roomId, userId }) => {
     try {
-      const room = await ChatRoom.findById(roomId);
-      if (!room) return;
+      if (!roomId || !userId) {
+        console.warn('⚠️ getOnlineStatus: Missing roomId or userId');
+        return;
+      }
+
+      const roomIdStr = roomId.toString();
+      const userIdStr = userId.toString();
+      
+      if (!socket.rooms.has(roomIdStr)) {
+        console.warn(`⚠️ User ${userIdStr} not in room ${roomIdStr}`);
+        return;
+      }
+
+      const room = await ChatRoom.findById(roomIdStr).populate('participants', '_id');
+      if (!room) {
+        console.warn(`⚠️ Room ${roomIdStr} not found`);
+        return;
+      }
 
       const onlineStatuses = {};
       for (const participant of room.participants) {
         const participantId = participant._id.toString();
         
-        // FIX: Current user should always be true when requesting status
-        if (participantId === userId.toString()) {
+        if (participantId === userIdStr) {
           onlineStatuses[participantId] = true;
         } else {
           onlineStatuses[participantId] = onlineUsers.has(participantId);
         }
       }
 
-      console.log('📊 Sending online statuses for room:', roomId, onlineStatuses);
-      socket.emit('onlineStatuses', { roomId, statuses: onlineStatuses });
+      console.log(`📊 Sending online statuses for room ${roomIdStr}:`, onlineStatuses);
+      socket.emit('onlineStatuses', { roomId: roomIdStr, statuses: onlineStatuses });
     } catch (error) {
       console.error('❌ Error getting online status:', error);
+      socket.emit('error', { message: 'Failed to get online status' });
     }
   });
 
-  // Message status updates
   socket.on('messageStatus', async ({ roomId, messageId, status }) => {
     try {
       const chat = await Chat.findOne({ roomId });
@@ -400,7 +394,6 @@ io.on('connection', (socket) => {
           message.status = status;
           await chat.save();
           
-          // Broadcast status update
           socket.to(roomId).emit('messageStatusUpdate', {
             messageId,
             status,
@@ -429,7 +422,6 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Notify others in the room
       socket.to(roomIdStr).emit('userStatusUpdate', {
         userId: userIdStr,
         isOnline: false,
@@ -449,7 +441,6 @@ io.on('connection', (socket) => {
       onlineUsers.delete(disconnectedUserId);
       userSockets.delete(socket.id);
 
-      // Notify all rooms this user was in
       if (userRooms.has(disconnectedUserId)) {
         const rooms = userRooms.get(disconnectedUserId);
         rooms.forEach(roomId => {
@@ -466,7 +457,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// Enhanced debug endpoints
+// Debug endpoints
 app.get("/api/debug/connections", (req, res) => {
   const connections = [];
   io.sockets.sockets.forEach(socket => {
@@ -523,12 +514,22 @@ app.get("/api/debug/presence", (req, res) => {
   res.json(presenceData);
 });
 
-// NEW: Debug endpoint for online users
 app.get("/api/debug/online-users", (req, res) => {
   res.json({
     onlineUsers: Array.from(onlineUsers.entries()),
     totalOnline: onlineUsers.size,
     timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    connections: io.engine.clientsCount,
+    onlineUsers: onlineUsers.size,
+    rateLimitedUsers: userMessageCounts.size,
+    mode: 'enhanced-presence'
   });
 });
 
@@ -542,17 +543,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
   console.log(`📡 Socket.IO ready for ENHANCED ONLINE PRESENCE`);
   console.log(`🛡️  Rate limiting: ${MESSAGE_RATE_LIMIT} messages/minute`);
-});
-
-app.get("/api/health", (req, res) => {
-  res.status(200).json({
-    status: "OK",
-    timestamp: new Date().toISOString(),
-    connections: io.engine.clientsCount,
-    onlineUsers: onlineUsers.size,
-    rateLimitedUsers: userMessageCounts.size,
-    mode: 'enhanced-presence'
-  });
 });
 
 export default io;
