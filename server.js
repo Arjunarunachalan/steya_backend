@@ -93,7 +93,7 @@ io.on('connection', (socket) => {
     }
     userRooms.get(userIdStr).add(roomIdStr);
 
-    // Also track socket connection
+    // Also track socket connection - MARK USER AS ONLINE
     onlineUsers.set(userIdStr, socket.id);
     userSockets.set(socket.id, userIdStr);
 
@@ -133,12 +133,20 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Get online statuses for all participants
+      // FIXED: Get online statuses for all participants - CURRENT USER SHOULD BE TRUE
       const onlineStatuses = {};
       for (const participant of chatRoom.participants) {
         const participantId = participant._id.toString();
-        onlineStatuses[participantId] = onlineUsers.has(participantId);
+        
+        // FIX: Current user should always be true, others check onlineUsers
+        if (participantId === userIdStr) {
+          onlineStatuses[participantId] = true;
+        } else {
+          onlineStatuses[participantId] = onlineUsers.has(participantId);
+        }
       }
+
+      console.log('📊 Sending online statuses to client:', onlineStatuses);
 
       socket.emit('initialData', {
         messages,
@@ -166,7 +174,7 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       });
 
-      console.log(`📢 User ${userIdStr} joined room ${roomIdStr}. Online status broadcasted.`);
+      console.log(`📢 User ${userIdStr} joined room ${roomIdStr}. Online status: true`);
 
     } catch (error) {
       console.error('❌ Error joining room:', error);
@@ -357,7 +365,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Online status requests
+  // FIXED: Online status requests
   socket.on('getOnlineStatus', async ({ roomId, userId }) => {
     try {
       const room = await ChatRoom.findById(roomId);
@@ -366,11 +374,17 @@ io.on('connection', (socket) => {
       const onlineStatuses = {};
       for (const participant of room.participants) {
         const participantId = participant._id.toString();
-        onlineStatuses[participantId] = onlineUsers.has(participantId);
+        
+        // FIX: Current user should always be true when requesting status
+        if (participantId === userId.toString()) {
+          onlineStatuses[participantId] = true;
+        } else {
+          onlineStatuses[participantId] = onlineUsers.has(participantId);
+        }
       }
 
+      console.log('📊 Sending online statuses for room:', roomId, onlineStatuses);
       socket.emit('onlineStatuses', { roomId, statuses: onlineStatuses });
-      console.log(`📊 Sent online statuses for room ${roomId}:`, onlineStatuses);
     } catch (error) {
       console.error('❌ Error getting online status:', error);
     }
@@ -507,6 +521,15 @@ app.get("/api/debug/presence", (req, res) => {
   };
   
   res.json(presenceData);
+});
+
+// NEW: Debug endpoint for online users
+app.get("/api/debug/online-users", (req, res) => {
+  res.json({
+    onlineUsers: Array.from(onlineUsers.entries()),
+    totalOnline: onlineUsers.size,
+    timestamp: new Date().toISOString()
+  });
 });
 
 process.on('SIGTERM', () => {
