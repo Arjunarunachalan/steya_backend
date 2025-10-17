@@ -406,15 +406,18 @@ io.on('connection', (socket) => {
 // Place it with your other socket.on() handlers
 
 socket.on('deleteMessage', async ({ roomId, messageId, userId }) => {
-  console.log(`🗑️ DELETE MESSAGE REQUEST:`, {
-    room: roomId,
-    message: messageId,
-    user: userId
+  console.log('🗑️ DELETE MESSAGE REQUEST DETAILS:', {
+    roomId: roomId?.toString(),
+    messageId: messageId?.toString(), 
+    userId: userId?.toString(),
+    messageIdType: typeof messageId,
+    messageIdExists: !!messageId
   });
 
   try {
     // Validation
     if (!roomId || !messageId || !userId) {
+      console.log('❌ Missing fields:', { roomId, messageId, userId });
       socket.emit('error', { message: 'Missing required fields for deletion' });
       return;
     }
