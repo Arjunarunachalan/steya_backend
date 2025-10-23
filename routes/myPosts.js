@@ -1,7 +1,7 @@
 import express from 'express';
 import Room from '../models/RoomSchema.js';
 import { authMiddleware } from '../middlewares/authMiddleware.js';
-
+import ChatRoom from '../models/RoomChatmodal.js';
 const router = express.Router();
 
 // ✅ GET user's posts with pagination and filtering
@@ -174,6 +174,7 @@ router.patch('/my-posts/:postId/toggle-status', authMiddleware, async (req, res)
   }
 });
 
+
 // ✅ RENEW post (extend expiry date)
 router.patch('/my-posts/:postId/renew', authMiddleware, async (req, res) => {
   try {
@@ -221,13 +222,15 @@ router.patch('/my-posts/:postId/renew', authMiddleware, async (req, res) => {
   }
 });
 
+
 // ✅ DELETE user's post
 router.delete('/my-posts/:postId', authMiddleware, async (req, res) => {
   try {
     const { postId } = req.params;
     const userId = req.user._id;
 
-    const post = await Room.findOneAndDelete({
+    // Find the post first to verify ownership
+    const post = await Room.findOne({
       _id: postId,
       createdBy: userId
     });
@@ -239,14 +242,37 @@ router.delete('/my-posts/:postId', authMiddleware, async (req, res) => {
       });
     }
 
+    // Instead of deleting, mark the post as deleted with expiry date
+    const deletedPost = await Room.findByIdAndUpdate(
+      postId,
+      {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deleteExpiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) // 3 days from now
+      },
+      { new: true }
+    );
+
+    // Mark all associated chat rooms as deleted
+    await ChatRoom.updateMany(
+      { productId: postId },
+      {
+        isDeleted: true,
+        deletedAt: new Date(),
+        deleteExpiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        status: 'expired' // Change status to expired
+      }
+    );
+
     res.json({
       success: true,
-      message: 'Post deleted successfully',
-      postId: postId
+      message: 'Post marked as deleted. Associated chats will be removed in 3 days.',
+      postId: postId,
+      deletedAt: deletedPost.deletedAt
     });
 
   } catch (error) {
-    console.error('❌ Error deleting post:', error);
+    console.error('❌ Error soft deleting post:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete post',
@@ -254,6 +280,7 @@ router.delete('/my-posts/:postId', authMiddleware, async (req, res) => {
     });
   }
 });
+
 
 // ✅ GET single post details (for editing)
 router.get('/my-posts/:postId/details', authMiddleware, async (req, res) => {

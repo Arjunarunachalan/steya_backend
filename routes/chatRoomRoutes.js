@@ -45,6 +45,57 @@ const logError = (operation, error, additionalData = {}) => {
   });
 };
 
+router.post('/mark-read', async (req, res) => {
+  try {
+    const { roomId, userId } = req.body;
+
+    if (!roomId || !userId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Room ID and User ID are required' 
+      });
+    }
+
+    // Add userId to readBy array if not already present
+    const room = await ChatRoom.findByIdAndUpdate(
+      roomId,
+      { $addToSet: { readBy: userId } },
+      { new: true }
+    );
+
+    if (!room) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Chat room not found' 
+      });
+    }
+
+    // Emit socket event to update other connected clients
+    const io = req.app.get('io'); // Assuming you set io on app
+    if (io) {
+      room.participants.forEach(participantId => {
+        io.to(`user_${participantId}`).emit('messageRead', {
+          roomId,
+          userId
+        });
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Marked as read',
+      room 
+    });
+
+  } catch (error) {
+    console.error('Error marking as read:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to mark as read' 
+    });
+  }
+});
+
 // Get chatrooms with pagination - COMPATIBLE WITH YOUR MODEL
 router.get('/chatrooms', authMiddleware, generalLimiter, async (req, res) => {
   try {
@@ -55,23 +106,54 @@ router.get('/chatrooms', authMiddleware, generalLimiter, async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
     
-    // ✅ COMPATIBLE: Using your model fields exactly
+    // ✅ UPDATED QUERY: Include both active AND deleted-but-not-expired chats
     const chatrooms = await ChatRoom.find({ 
       participants: userId,
-      status: { $ne: 'cancelled' } // Exclude cancelled rooms
+      $or: [
+        { 
+          status: { $ne: 'cancelled' }, // Active chats
+          isDeleted: false 
+        },
+        { 
+          isDeleted: true, // Deleted but not expired yet
+          deleteExpiresAt: { $gt: new Date() }
+        }
+      ]
     })
       .populate('participants', 'name email picture')
       .populate('productId', 'title images price') // Matches your Room model
+      .populate('lastMessageSender', 'name picture') // ✅ ADD THIS LINE - Populate lastMessageSender
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit);
     
     const total = await ChatRoom.countDocuments({
       participants: userId,
-      status: { $ne: 'cancelled' }
+      $or: [
+        { 
+          status: { $ne: 'cancelled' },
+          isDeleted: false 
+        },
+        { 
+          isDeleted: true,
+          deleteExpiresAt: { $gt: new Date() }
+        }
+      ]
     });
 
     console.log(`📱 Fetched ${chatrooms.length} chatrooms for user ${userId} (page ${page})`);
+    
+    // DEBUG: Log the structure of first room to verify lastMessageSender
+    if (chatrooms.length > 0) {
+      console.log('🔍 FIRST ROOM STRUCTURE:', {
+        roomId: chatrooms[0]._id,
+        lastMessageSender: chatrooms[0].lastMessageSender,
+        lastMessage: chatrooms[0].lastMessage,
+        hasMessages: chatrooms[0].hasMessages,
+        isDeleted: chatrooms[0].isDeleted, // ✅ Check deletion status
+        deleteExpiresAt: chatrooms[0].deleteExpiresAt // ✅ Check expiry
+      });
+    }
     
     res.json({
       chatrooms,
@@ -280,8 +362,11 @@ router.get('/room/:roomId', authMiddleware, generalLimiter, async (req, res) => 
     const chatRoom = await ChatRoom.findOne({
       _id: roomId,
       status: { $ne: 'cancelled' }
-    }).populate('participants', 'name email picture')
-      .populate('productId', 'title images price'); // Matches your Room model
+    })
+      .populate('participants', 'name email picture')
+      .populate('productId', 'title images price') // Matches your Room model
+      .populate('lastMessageSender', 'name picture') // ✅ ADD THIS LINE
+      .populate('readBy', 'name picture'); // ✅ Also populate readBy if you want to use it later
 
     if (!chatRoom) {
       return res.status(404).json({ message: 'Chat room not found or unavailable' });

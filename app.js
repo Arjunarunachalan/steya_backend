@@ -20,7 +20,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoute);
-app.use('/api/users', userRoutes);
+app.use('/api', userRoutes);
 app.use("/api", roomRoutes);
 app.use('/api/chat', chatRoomRoutes);
 app.use('/api/push', pushTokenRoutes);

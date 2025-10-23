@@ -4,30 +4,39 @@ import User from "../models/userModal.js";
 
 export const refreshAccessToken = async (req, res) => {
   try {
-    const { userId } = req.body; // sent by frontend
-    console.log("Refresh request userId:", userId);
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "userId required" });
+    }
 
     const user = await User.findById(userId);
-    if (!user) return res.status(401).json({ success: false, message: "User not found" });
-    console.log("User found:", user._id, "Refresh token:", user.refreshToken);
+    if (!user || !user.refreshToken) {
+      return res.status(401).json({ success: false, message: "Invalid session" });
+    }
 
-    if (!user.refreshToken) return res.status(401).json({ success: false, message: "No refresh token" });
+    // Verify refresh token
+    let decodedRefresh;
+    try {
+      decodedRefresh = jwt.verify(user.refreshToken, process.env.JWT_REFRESH_SECRET);
+    } catch (jwtErr) {
+      // Refresh token expired or invalid - clear it
+      user.refreshToken = null;
+      await user.save();
+      return res.status(401).json({ success: false, message: "Refresh token expired" });
+    }
 
-    // verify refresh token
-    const decodedRefresh = jwt.verify(user.refreshToken, process.env.JWT_REFRESH_SECRET);
-    console.log("Decoded refresh token:", decodedRefresh);
-
-    // issue new access token
+    // Issue new access token
     const newAccessToken = jwt.sign(
       { id: user._id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );
-    console.log("New access token:", newAccessToken);
 
     res.json({ success: true, accessToken: newAccessToken });
+
   } catch (err) {
-    console.error("Refresh token error:", err);
-    res.status(401).json({ success: false, message: "Invalid refresh token" });
+    console.error("Refresh error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

@@ -14,12 +14,12 @@ export const sendPushNotification = async (pushToken, data) => {
       console.error(`❌ Invalid Expo push token: ${pushToken}`);
       return { success: false, error: 'Invalid push token' };
     }
-
+    
     const message = {
       to: pushToken,
       sound: 'default',
-      title: `🔔 New message from ${data.senderName}`,  // clear header
-      body: `💬 ${data.message}`, // chat bubble vibe
+      title: `New message from 👤 ${data.senderName}`,  
+      body: data.message,  
       data: {
         type: 'chat_message',
         chatId: data.chatId,
@@ -31,8 +31,9 @@ export const sendPushNotification = async (pushToken, data) => {
       priority: 'high',
       channelId: 'chat-messages',
     };
-console.log(message,"sented message");
 
+    console.log(message, "sent message");
+    
     const ticketChunk = await expo.sendPushNotificationsAsync([message]);
     console.log('✅ Push notification sent:', ticketChunk);
     return { success: true, ticket: ticketChunk[0] };

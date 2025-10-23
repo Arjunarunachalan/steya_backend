@@ -136,7 +136,7 @@ const watermarkPath = path.join(process.cwd(), "assets/watermark.png");
 export const uploadRooms = async (req, res) => {
   try {
     let images = [];
-    let thumbnail = null; // only first image will have this
+    let thumbnail = null;
 
     // Collect files
     let allFiles = [];
@@ -166,10 +166,10 @@ export const uploadRooms = async (req, res) => {
 
       if (!file.buffer || file.buffer.length === 0) continue;
 
-      // Resize + watermark
+      // ✅ BETTER QUALITY - Resize + watermark main image
       let mainBuffer = await sharp(file.buffer)
         .resize({ width: 1280, withoutEnlargement: true })
-        .jpeg({ quality: 80 })
+        .jpeg({ quality: 85 })  // ✅ Increased from 80 to 85
         .toBuffer();
 
       if (fs.existsSync(watermarkPath)) {
@@ -190,11 +190,11 @@ export const uploadRooms = async (req, res) => {
 
       const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
 
-      // First file → generate thumbnail
+      // ✅ FIRST IMAGE = HIGH QUALITY THUMBNAIL
       if (i === 0) {
         const thumbBuffer = await sharp(file.buffer)
-          .resize({ width: 300, withoutEnlargement: true })
-          .jpeg({ quality: 70 })
+          .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px instead of 300px!
+          .jpeg({ quality: 90 })  // ✅ 90 quality - HIGHER than main image!
           .toBuffer();
 
         const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
@@ -248,72 +248,52 @@ export const uploadRooms = async (req, res) => {
       return Array.isArray(value) ? value[value.length - 1] : value;
     };
 
-    // Fix for mealsProvided
-    const parseMealsProvided = () => {
-      const value = req.body.mealsProvided;
-      if (!value) return [];
-      if (Array.isArray(value)) {
-        // Could be ["breakfast","lunch"] or ["[\"breakfast\",\"lunch\"]"]
-        return value.flatMap(v => {
-          try {
-            return typeof v === "string" ? JSON.parse(v) : v;
-          } catch {
-            return v;
-          }
-        });
-      } else if (typeof value === "string") {
-        try {
-          return JSON.parse(value);
-        } catch {
-          return [value];
-        }
-      }
-      return [];
-    };
+    // ✅ AUTO-SET EXPIRY DATE (30 days from now)
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 30);
 
     // Create room doc
-  const roomData = {
-  category: getValue("category") || null,
-  title: getValue("title") || "",
-  description: getValue("description") || "",
-  images,
-  thumbnail, 
-  location: parsedLocation || null,
-  contactPhone: getValue("contactPhone") || "",
-  showPhonePublic: getValue("showPhonePublic") === "true",
-  monthlyRent: getValue("monthlyRent") || null,
-  priceRange: parseJSON("priceRange") || {},
-  securityDeposit: getValue("securityDeposit") || null,
-  roommatesWanted: getValue("roommatesWanted") || null,
-  genderPreference: getValue("genderPreference") || null,
-  habitPreferences: parseJSON("habitPreferences") || [],
-  purpose: parseJSON("purpose") || [],
-  availableSpace: getValue("availableSpace") || null,
-  pgGenderCategory: getValue("pgGenderCategory") || null,
-  roomTypesAvailable: parseJSON("roomTypesAvailable") || [],
-  mealsProvided: parseJSON("mealsProvided") || [],
-  amenities: parseJSON("amenities") || [],
-  rules: parseJSON("rules") || [],
-  propertyType: getValue("propertyType") || null,
-  furnishedStatus: getValue("furnishedStatus") || null,
-  squareFeet: getValue("squareFeet") || null,
-  bedrooms: getValue("bedrooms") || null,
-  bathrooms: getValue("bathrooms") || null,
-  balconies: getValue("balconies") || null,
-  floorNumber: getValue("floorNumber") || null,
-  totalFloors: getValue("totalFloors") || null,
-  tenantPreference: getValue("tenantPreference") || null,
-  parking: getValue("parking") || null,
-  expiryDate: getValue("expiryDate") || null,
-  createdBy: req.user.id,
-};
+    const roomData = {
+      category: getValue("category") || null,
+      title: getValue("title") || "",
+      description: getValue("description") || "",
+      images,
+      thumbnail, 
+      location: parsedLocation || null,
+      contactPhone: getValue("contactPhone") || "",
+      showPhonePublic: getValue("showPhonePublic") === "true",
+      monthlyRent: getValue("monthlyRent") || null,
+      priceRange: parseJSON("priceRange") || {},
+      securityDeposit: getValue("securityDeposit") || null,
+      roommatesWanted: getValue("roommatesWanted") || null,
+      genderPreference: getValue("genderPreference") || null,
+      habitPreferences: parseJSON("habitPreferences") || [],
+      purpose: parseJSON("purpose") || [],
+      availableSpace: getValue("availableSpace") || null,
+      pgGenderCategory: getValue("pgGenderCategory") || null,
+      roomTypesAvailable: parseJSON("roomTypesAvailable") || [],
+      mealsProvided: parseJSON("mealsProvided") || [],
+      amenities: parseJSON("amenities") || [],
+      rules: parseJSON("rules") || [],
+      propertyType: getValue("propertyType") || null,
+      furnishedStatus: getValue("furnishedStatus") || null,
+      squareFeet: getValue("squareFeet") || null,
+      bedrooms: getValue("bedrooms") || null,
+      bathrooms: getValue("bathrooms") || null,
+      balconies: getValue("balconies") || null,
+      floorNumber: getValue("floorNumber") || null,
+      totalFloors: getValue("totalFloors") || null,
+      tenantPreference: getValue("tenantPreference") || null,
+      parking: getValue("parking") || null,
+      expiryDate: getValue("expiryDate") || expiryDate,  // ✅ Auto-set if not provided
+      createdBy: req.user.id,
+    };
 
     const room = new Room(roomData);
-     console.log('====================================');
-    console.log(roomData, "ddddddddddddddd");
     console.log('====================================');
-   
-   
+    console.log(roomData, "Room Data");
+    console.log('====================================');
+
     await room.save();
 
     res.status(201).json({
@@ -339,7 +319,6 @@ export const uploadRooms = async (req, res) => {
 
 export const updateRoom = async (req, res) => {
   try {
-    // ✅ ADD COMPLETE DEBUGGING
     console.log('🔍 COMPLETE REQUEST DEBUG:');
     console.log('1. req.files:', req.files);
     console.log('2. req.body keys:', Object.keys(req.body));
@@ -350,7 +329,6 @@ export const updateRoom = async (req, res) => {
 
     console.log(`🔄 UPDATE ROOM: User ${userId} → Room ${roomId}`);
 
-    // Check if room exists and user owns it
     const existingRoom = await Room.findOne({ 
       _id: roomId, 
       createdBy: userId 
@@ -363,10 +341,8 @@ export const updateRoom = async (req, res) => {
       });
     }
 
-    // ✅ Get existing images that should be KEPT from frontend
     const existingImagesToKeep = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
     
-    // ✅ FIXED: Properly count files from req.files object
     const imageFiles = req.files && req.files.images ? 
       (Array.isArray(req.files.images) ? req.files.images : [req.files.images]) : [];
     const totalNewFiles = imageFiles.length + (req.files && req.files.thumbnail ? 1 : 0);
@@ -379,14 +355,12 @@ export const updateRoom = async (req, res) => {
       hasThumbnail: !!(req.files && req.files.thumbnail)
     });
 
-    // ✅ Identify images to DELETE (only those NOT being kept)
     const imagesToDelete = existingRoom.images.filter(existingImg => 
       !existingImagesToKeep.includes(existingImg.originalUrl)
     );
 
     console.log('🗑️ Images to delete from S3:', imagesToDelete.length);
 
-    // ✅ SAFELY delete only images that are NOT used by other rooms
     if (imagesToDelete.length > 0) {
       await safelyDeleteImagesFromS3(imagesToDelete, roomId);
     }
@@ -394,12 +368,10 @@ export const updateRoom = async (req, res) => {
     let images = [];
     let thumbnail = null;
 
-    // ✅ Add kept existing images
     existingImagesToKeep.forEach(url => {
       images.push({ originalUrl: url });
     });
 
-    // ✅ Process NEW uploaded images
     if (imageFiles.length > 0) {
       console.log('📤 Processing new images:', imageFiles.length);
 
@@ -408,10 +380,10 @@ export const updateRoom = async (req, res) => {
 
         if (!file.buffer || file.buffer.length === 0) continue;
 
-        // Resize + watermark main image
+        // ✅ BETTER QUALITY - Resize + watermark main image
         let mainBuffer = await sharp(file.buffer)
           .resize({ width: 1280, withoutEnlargement: true })
-          .jpeg({ quality: 80 })
+          .jpeg({ quality: 85 })  // ✅ Increased quality
           .toBuffer();
 
         if (fs.existsSync(watermarkPath)) {
@@ -421,7 +393,6 @@ export const updateRoom = async (req, res) => {
             .toBuffer();
         }
 
-        // Upload main image
         const mainKey = `properties/${uuidv4()}-${Date.now()}-${i}-main.jpg`;
         const mainResult = await s3.upload({
           Bucket: BUCKET_NAME,
@@ -432,11 +403,11 @@ export const updateRoom = async (req, res) => {
 
         const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
 
-        // ✅ FIRST IMAGE = THUMBNAIL (only for first new image if no existing images)
+        // ✅ HIGH QUALITY THUMBNAIL
         if (i === 0 && images.length === 0) {
           const thumbBuffer = await sharp(file.buffer)
-            .resize({ width: 300, withoutEnlargement: true })
-            .jpeg({ quality: 70 })
+            .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px
+            .jpeg({ quality: 90 })  // ✅ 90 quality
             .toBuffer();
 
           const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
@@ -454,13 +425,13 @@ export const updateRoom = async (req, res) => {
       }
     }
 
-    // ✅ Process thumbnail if sent separately
+    // ✅ Process separate thumbnail upload
     if (req.files && req.files.thumbnail && !thumbnail) {
       const thumbFile = Array.isArray(req.files.thumbnail) ? req.files.thumbnail[0] : req.files.thumbnail;
       
       const thumbBuffer = await sharp(thumbFile.buffer)
-        .resize({ width: 300, withoutEnlargement: true })
-        .jpeg({ quality: 70 })
+        .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px
+        .jpeg({ quality: 90 })  // ✅ 90 quality
         .toBuffer();
 
       const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
@@ -474,19 +445,14 @@ export const updateRoom = async (req, res) => {
       thumbnail = { url: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}` };
     }
 
-    // ✅ THUMBNAIL LOGIC: First image always becomes thumbnail
     if (images.length > 0 && !thumbnail) {
-      // If we have existing images, use first one as thumbnail
       if (existingImagesToKeep.length > 0) {
         thumbnail = { url: existingImagesToKeep[0] };
-      }
-      // If we have new images and no thumbnail yet, use first new image
-      else if (images.length > 0) {
+      } else if (images.length > 0) {
         thumbnail = { url: images[0].originalUrl };
       }
     }
 
-    // Helper functions
     const parseJSON = (field) => {
       if (!req.body[field]) return undefined;
       try {
@@ -506,7 +472,6 @@ export const updateRoom = async (req, res) => {
       return Array.isArray(value) ? value[value.length - 1] : value;
     };
 
-    // Parse location
     let parsedLocation = existingRoom.location;
     if (req.body.location) {
       try {
@@ -521,7 +486,6 @@ export const updateRoom = async (req, res) => {
       }
     }
 
-    // Prepare update data
     const updateData = {
       category: getValue("category") || existingRoom.category,
       title: getValue("title") || existingRoom.title,
@@ -541,7 +505,7 @@ export const updateRoom = async (req, res) => {
       availableSpace: getValue("availableSpace") || existingRoom.availableSpace,
       pgGenderCategory: getValue("pgGenderCategory") || existingRoom.pgGenderCategory,
       roomTypesAvailable: parseJSON("roomTypesAvailable") || existingRoom.roomTypesAvailable,
-    mealsProvided: parseJSON("mealsProvided") || existingRoom.mealsProvided,
+      mealsProvided: parseJSON("mealsProvided") || existingRoom.mealsProvided,
       amenities: parseJSON("amenities") || existingRoom.amenities,
       rules: parseJSON("rules") || existingRoom.rules,
       propertyType: getValue("propertyType") || existingRoom.propertyType,
@@ -557,14 +521,12 @@ export const updateRoom = async (req, res) => {
       updatedAt: new Date()
     };
 
-    // Remove undefined fields
     Object.keys(updateData).forEach(key => {
       if (updateData[key] === undefined) {
         delete updateData[key];
       }
     });
 
-    // Update room
     const updatedRoom = await Room.findByIdAndUpdate(
       roomId,
       updateData,
@@ -593,19 +555,16 @@ export const updateRoom = async (req, res) => {
   }
 };
 
-// ✅ SAFE DELETE FUNCTION
 const safelyDeleteImagesFromS3 = async (imagesToDelete, roomId) => {
   try {
     for (const image of imagesToDelete) {
       const imageUrl = image.originalUrl;
       
-      // Check if any other room is using this image
       const otherRoomsUsingImage = await Room.countDocuments({
         'images.originalUrl': imageUrl,
         _id: { $ne: roomId }
       });
 
-      // Only delete if NO other rooms are using this image
       if (otherRoomsUsingImage === 0) {
         console.log(`🗑️ Deleting unused image: ${imageUrl}`);
         try {
@@ -624,7 +583,6 @@ const safelyDeleteImagesFromS3 = async (imagesToDelete, roomId) => {
   }
 };
 
-// Helper to delete image from S3 by URL
 const deleteImageFromS3ByUrl = async (imageUrl) => {
   try {
     const key = imageUrl.split('.amazonaws.com/')[1];
@@ -662,13 +620,41 @@ export const getRooms = async (req, res) => {
     const latNum = parseFloat(lat);
     const lngNum = parseFloat(lng);
 
-    // Build base match stage with location
+    // Build base match stage with location AND exclusion filters
     const baseMatchStage = {
       $and: [
         {
           $or: [
             { location: { $exists: true, $ne: null } },
             { 'location.coordinates': { $exists: true, $ne: null } }
+          ]
+        },
+        // Exclude deleted rooms
+        { 
+          $or: [
+            { isDeleted: { $exists: false } },
+            { isDeleted: false }
+          ]
+        },
+        // Exclude blocked rooms
+        { 
+          $or: [
+            { isBlocked: { $exists: false } },
+            { isBlocked: false }
+          ]
+        },
+        // Only include active rooms
+        { 
+          $or: [
+            { isActive: { $exists: false } },
+            { isActive: true }
+          ]
+        },
+        // Exclude expired rooms
+        {
+          $or: [
+            { expiryDate: { $exists: false } },
+            { expiryDate: { $gt: new Date() } }
           ]
         }
       ]

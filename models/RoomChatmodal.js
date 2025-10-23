@@ -17,7 +17,6 @@ const chatRoomSchema = new mongoose.Schema({
     ref: 'User',
     required: true 
   }],
-  // ADD THESE FIELDS FOR BETTER MANAGEMENT
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -34,9 +33,22 @@ const chatRoomSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  lastMessageSender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  lastMessageAt: {
+    type: Date,
+    default: null
+  },
+  readBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   status: {
     type: String,
-    enum: ['pending', 'active', 'cancelled'],
+    enum: ['pending', 'active', 'cancelled', 'expired'], // ADD 'expired' here
     default: 'pending'
   },
   hasMessages: {
@@ -50,7 +62,22 @@ const chatRoomSchema = new mongoose.Schema({
   firstMessageAt: {
     type: Date,
     default: null
+  },
+
+  // ===== ADD THESE 3 FIELDS FOR SOFT DELETE =====
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date,
+    default: null
+  },
+  deleteExpiresAt: {
+    type: Date,
+    default: null
   }
+
 }, { 
   timestamps: true 
 });

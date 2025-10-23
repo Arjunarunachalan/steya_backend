@@ -11,13 +11,13 @@ const roomSchema = new mongoose.Schema({
   // ===== Common fields =====
   title: { type: String, required: true },
   description: { type: String, required: true },
- images: [
+  images: [
     {
       originalUrl: { type: String, required: true }, // all uploaded images
     }
   ],
   thumbnail: {
-    url: { type: String }, // only the FIRST image’s thumbnail
+    url: { type: String }, // only the FIRST image's thumbnail
   },
 
   // ===== Location (GeoJSON Point) =====
@@ -33,7 +33,6 @@ const roomSchema = new mongoose.Schema({
     },
     fullAddress: { type: String, default: "" },
   },
- 
 
   // ===== Contact =====
   contactPhone: { type: String, default: "" },
@@ -62,7 +61,7 @@ const roomSchema = new mongoose.Schema({
   rules: { type: [String], default: [] },
 
   // ===== Flat/Home Specific =====
-  propertyType: { type: String },
+  propertyType: { type: String , enum: ['Apartment/Flat', 'Independent House', 'Villa', 'Duplex'] },
   furnishedStatus: { type: String, enum: ["furnished", "semi_furnished", "unfurnished"] },
   squareFeet: { type: Number },
   bedrooms: { type: Number },
@@ -75,7 +74,7 @@ const roomSchema = new mongoose.Schema({
 
   // ===== Engagement =====
   views: { type: Number, default: 0 },
-viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+  viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 
@@ -93,6 +92,20 @@ viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   expiryDate: { type: Date, default: () => Date.now() + 30 * 24 * 60 * 60 * 1000 }, // 30 days
   isBlocked: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
+
+  // ===== ADD THESE 3 FIELDS FOR SOFT DELETE =====
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date,
+    default: null
+  },
+  deleteExpiresAt: {
+    type: Date,
+    default: null
+  }
 
 }, { timestamps: true });
 
@@ -113,4 +126,3 @@ roomSchema.pre("validate", function(next) {
 
 const Room = mongoose.model("Room", roomSchema);
 export default Room;
-    
