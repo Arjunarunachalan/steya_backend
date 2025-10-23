@@ -890,12 +890,12 @@ const pingMyself = () => {
 };
 
 // Schedule every 5 minutes
-cron.schedule('*/5 * * * *', pingMyself);
+cron.schedule('*/1 * * * *', pingMyself);
 
 // Also ping immediately when server starts
 setTimeout(pingMyself, 10000);
 
-console.log('✅ Self-ping cron job scheduled (every 5 minutes)');
+console.log('✅ Self-ping cron job scheduled (every 1 minutes)');
 
 // ✅ THEN YOUR EXISTING server.listen()
 server.listen(PORT, '0.0.0.0', () => {

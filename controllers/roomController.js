@@ -597,8 +597,111 @@ const deleteImageFromS3ByUrl = async (imageUrl) => {
 };
 
 
+function buildFilterQuery(filterData, category) {
+  const query = {};
+  
+  Object.keys(filterData).forEach(key => {
+    const filter = filterData[key];
+    
+    // Skip if filter is not selected or has no value
+    if (!filter.selected) return;
+    
+    let filterQuery = null;
 
-// controllers/roomController.js
+    if (category === 'shared') {
+      filterQuery = buildSharedFilter(key, filter);
+    } else if (category === 'pg_hostel') {
+      filterQuery = buildPgFilter(key, filter);
+    } else if (category === 'flat_home') {
+      filterQuery = buildRentalFilter(key, filter);
+    }
+
+    if (filterQuery) {
+      query[key] = filterQuery;
+    }
+  });
+  
+  console.log('Built filter query:', query);
+  return query;
+}
+
+function buildSharedFilter(key, filter) {
+  switch (key) {
+    case 'monthlyRent':
+    case 'roommatesWanted':
+      return { 
+        $gte: filter.currentMin || filter.min, 
+        $lte: filter.currentMax || filter.max 
+      };
+    case 'genderPreference':
+    case 'habitPreferences':
+    case 'purpose':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    case 'showPhonePublic':
+      return filter.value === true;
+    default:
+      return null;
+  }
+}
+
+function buildPgFilter(key, filter) {
+  switch (key) {
+    case 'priceRange':
+      // ✅ SIMPLE FIX: Just check if property's price range overlaps with filter
+      return {
+        'priceRange.min': { $lte: filter.currentMax || filter.max },
+        'priceRange.max': { $gte: filter.currentMin || filter.min }
+      };
+      
+    case 'pgGenderCategory':
+    case 'roomTypesAvailable':
+    case 'mealsProvided':
+    case 'amenities':
+    case 'rules':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+function buildRentalFilter(key, filter) {
+  switch (key) {
+    case 'monthlyRent':
+    case 'securityDeposit':
+    case 'squareFeet':
+    case 'bedrooms':
+    case 'bathrooms':
+      return { 
+        $gte: filter.currentMin || filter.min, 
+        $lte: filter.currentMax || filter.max 
+      };
+    case 'propertyType':
+    case 'furnishedStatus':
+    case 'tenantPreference': // ✅ FIXED: Changed from 'preferredTenant'
+    case 'parking':
+      if (filter.options && Array.isArray(filter.options)) {
+        const selectedOptions = filter.options
+          .filter(opt => opt.selected)
+          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
 
 
 // controllers/roomController.js
@@ -757,107 +860,7 @@ export const getRooms = async (req, res) => {
 };
 
 // Helper function to build filter queries based on category
-function buildFilterQuery(filterData, category) {
-  const query = {};
-  
-  Object.keys(filterData).forEach(key => {
-    const filter = filterData[key];
-    
-    // Skip if filter is not selected or has no value
-    if (!filter.selected) return;
-    
-    let filterQuery = null;
 
-    if (category === 'shared') {
-      filterQuery = buildSharedFilter(key, filter);
-    } else if (category === 'pg_hostel') {
-      filterQuery = buildPgFilter(key, filter);
-    } else if (category === 'flat_home') {
-      filterQuery = buildRentalFilter(key, filter);
-    }
-
-    if (filterQuery) {
-      query[key] = filterQuery;
-    }
-  });
-  
-  console.log('Built filter query:', query);
-  return query;
-}
-
-function buildSharedFilter(key, filter) {
-  switch (key) {
-    case 'monthlyRent':
-    case 'roommatesWanted':
-      return { 
-        $gte: filter.currentMin || filter.min, 
-        $lte: filter.currentMax || filter.max 
-      };
-    case 'genderPreference':
-    case 'habitPreferences':
-    case 'purpose':
-      if (filter.options && Array.isArray(filter.options)) {
-        const selectedOptions = filter.options
-          .filter(opt => opt.selected)
-          .map(opt => opt.label);
-        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
-      }
-      return null;
-    case 'showPhonePublic':
-      return filter.value === true;
-    default:
-      return null;
-  }
-}
-
-function buildPgFilter(key, filter) {
-  switch (key) {
-    case 'priceRange':
-      return { 
-        $gte: filter.currentMin || filter.min, 
-        $lte: filter.currentMax || filter.max 
-      };
-    case 'pgGenderCategory':
-    case 'roomTypesAvailable':
-    case 'mealsProvided':
-    case 'rules':
-      if (filter.options && Array.isArray(filter.options)) {
-        const selectedOptions = filter.options
-          .filter(opt => opt.selected)
-          .map(opt => opt.label);
-        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
-      }
-      return null;
-    default:
-      return null;
-  }
-}
-
-function buildRentalFilter(key, filter) {
-  switch (key) {
-    case 'monthlyRent':
-    case 'securityDeposit':
-    case 'squareFeet':
-    case 'bedrooms':
-    case 'bathrooms':
-      return { 
-        $gte: filter.currentMin || filter.min, 
-        $lte: filter.currentMax || filter.max 
-      };
-    case 'propertyType':
-    case 'furnishedStatus':
-    case 'preferredTenant':
-      if (filter.options && Array.isArray(filter.options)) {
-        const selectedOptions = filter.options
-          .filter(opt => opt.selected)
-          .map(opt => opt.label);
-        return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
-      }
-      return null;
-    default:
-      return null;
-  }
-}
 
 // GET /api/rooms/:id
 export const getRoomById = async (req, res) => {
