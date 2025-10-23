@@ -890,7 +890,7 @@ const pingMyself = () => {
 };
 
 // Schedule every 5 minutes
-cron.schedule('*/1 * * * *', pingMyself);
+cron.schedule('*/9 * * * *', pingMyself);
 
 // Also ping immediately when server starts
 setTimeout(pingMyself, 10000);
