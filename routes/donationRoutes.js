@@ -165,7 +165,7 @@ router.get('/history', authMiddleware, async (req, res) => {
 
 
 // routes/appVersion.js
-app.get('/app-version', (req, res) => {
+router.get('/app-version', (req, res) => {
    const { currentVersion } = req.query;
   
   console.log(`📱 App checking version: ${currentVersion}`);
