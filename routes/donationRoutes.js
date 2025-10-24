@@ -163,4 +163,30 @@ router.get('/history', authMiddleware, async (req, res) => {
   }
 });
 
+
+// routes/appVersion.js
+app.get('/app-version', (req, res) => {
+   const { currentVersion } = req.query;
+  
+  console.log(`📱 App checking version: ${currentVersion}`);
+  
+  // ✅ UPDATE THIS when you release new version!
+  const LATEST_VERSION = '1.0.0'; // ← Change to 1.0.1 when releasing
+  
+  const needsUpdate = currentVersion < LATEST_VERSION;
+  
+  res.json({
+    success: true,
+    hasUpdate: needsUpdate,
+    latestVersion: LATEST_VERSION,
+    updateType: 'flexible', // or 'immediate' for mandatory
+    features: [
+      '🎨 Beautiful new UI design',
+      '🚀 Faster performance',
+      '🐛 Bug fixes and improvements',
+      '✨ New features you\'ll love',
+    ]
+  });
+});
+
 export default router;
