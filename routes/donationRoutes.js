@@ -4,6 +4,7 @@ import Donation from '../models/Donation.js';
 import { authMiddleware } from '../middlewares/authMiddleware.js';
 import Razorpay from 'razorpay';
 import { log } from 'console';
+import  Contact  from '../models/Contact.js';
 
 const router = express.Router();
 
@@ -171,7 +172,7 @@ router.get('/app-version', (req, res) => {
   console.log(`📱 App checking version: ${currentVersion}`);
   
   // ✅ UPDATE THIS when you release new version!
-  const LATEST_VERSION = '1.0.0'; // ← Change to 1.0.1 when releasing
+  const LATEST_VERSION = '1.0.1'; // ← Change to 1.0.1 when releasing
   
   const needsUpdate = currentVersion < LATEST_VERSION;
   
@@ -188,5 +189,72 @@ router.get('/app-version', (req, res) => {
     ]
   });
 });
+
+// Contact Us Route
+router.post('/contact/submit', async (req, res) => {
+  try {
+    const { subject, message, userEmail, userName } = req.body;
+    
+    // Validate input
+    if (!subject || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Subject and message are required'
+      });
+    }
+    
+    // Save to database (create Contact model)
+    const contact = new Contact({
+      subject: subject.trim(),
+      message: message.trim(),
+      userEmail: userEmail || 'anonymous@steya.com',
+      userName: userName || 'Anonymous User',
+      status: 'pending', // pending, replied, resolved
+      createdAt: new Date()
+    });
+    
+    await contact.save();
+    
+    // Optional: Send email notification to admin
+    // await sendEmailToAdmin(contact);
+    
+    console.log('📧 New contact message received:', {
+      subject,
+      from: userEmail
+    });
+    
+    res.json({
+      success: true,
+      message: 'Contact message received successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ Contact submission error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit contact message'
+    });
+  }
+});
+
+router.get('/contact/all', async (req, res) => {
+  try {
+    const contacts = await Contact.find()
+      .sort({ createdAt: -1 })
+      .limit(100);
+    
+    res.json({
+      success: true,
+      contacts: contacts
+    });
+  } catch (error) {
+    console.error('Error fetching contacts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch contacts'
+    });
+  }
+});
+
 
 export default router;
