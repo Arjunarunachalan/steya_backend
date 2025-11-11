@@ -16,6 +16,13 @@ router.post("/rooms",authMiddleware,upload.fields([
   { name: 'thumbnail', maxCount: 1 }
 ]), uploadRooms);
 
+router.put('/update/:roomId', authMiddleware,upload.fields([
+  { name: 'images', maxCount: 10 },
+  { name: 'thumbnail', maxCount: 1 }
+]), updateRoom);
+
+
+
 router.get("/getrooms", getRooms);
 
 router.get("/singleroom/:id", getRoomById);
@@ -26,10 +33,7 @@ router.post('/add', authMiddleware, addFavorite);
 // ✅ REMOVE FROM FAVORITES
 router.delete('/remove', authMiddleware, removeFavorite);
 
-router.put('/update/:roomId', authMiddleware,upload.fields([
-  { name: 'images', maxCount: 10 },
-  { name: 'thumbnail', maxCount: 1 }
-]), updateRoom);
+
 
 
 // ✅ TOGGLE FAVORITE (Add/Remove in one endpoint)

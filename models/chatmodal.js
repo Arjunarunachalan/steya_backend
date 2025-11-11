@@ -79,8 +79,6 @@ const chatSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for performance
-chatSchema.index({ roomId: 1 });
 chatSchema.index({ 'messages.createdAt': -1 });
 
 export default mongoose.models.Chat || mongoose.model('Chat', chatSchema);

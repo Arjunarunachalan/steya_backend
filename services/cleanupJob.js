@@ -3,7 +3,7 @@ import AutoCleanupService from '../services/autoCleanupService.js';
 
 export function startCleanupJob() {
   // Run daily at 3 AM
-  cron.schedule('0 3 * * *', async () => {
+   cron.schedule('0 3 * * *', async () => {
     console.log('🕒 Starting scheduled auto-cleanup job...');
     try {
       // Get stats before cleanup

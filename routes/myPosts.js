@@ -16,8 +16,11 @@ router.get('/my-posts', authMiddleware, async (req, res) => {
 
     console.log(`📝 Fetching posts for user: ${userId}, Status: ${status}, Category: ${category}`);
 
-    // Build query
-    let query = { createdBy: userId };
+    // Build query - EXCLUDE DELETED POSTS
+    let query = { 
+      createdBy: userId,
+      isDeleted: { $ne: true } // This excludes soft-deleted posts
+    };
     
     // Filter by status
     if (status && status !== 'all') {

@@ -1,100 +1,4 @@
-
-
-// Create a new room
-// export const createRoom = async (req, res) => {
-//   try {
-//     const {
-//       category,
-//       title,
-//       description,
-//       images,
-
-//       // Location
-//       location,
-
-//       // Contact
-//       contactPhone,
-//       showPhonePublic,
-
-//       // Financial
-//       monthlyRent,
-//       priceRange,
-//       securityDeposit,
-
-//       // Shared room
-//       roommatesWanted,
-//       genderPreference,
-//       habitPreferences,
-//       purpose,
-
-//       // PG/Hostel
-//       availableSpace,
-//       pgGenderCategory,
-//       roomTypesAvailable,
-//       mealsProvided,
-//       amenities,
-//       rules,
-
-//       // Flat/Home
-//       propertyType,
-//       furnishedStatus,
-//       squareFeet,
-//       bedrooms,
-//       bathrooms,
-//       balconies,
-//       floorNumber,
-//       totalFloors,
-//       tenantPreference,
-//       parking,
-
-//       // Post Control
-//       expiryDate,
-//     } = req.body;
-
-//     const room = new Room({
-//       category,
-//       title,
-//       description,
-//       images,
-//       location,
-//       contactPhone,
-//       showPhonePublic,
-//       monthlyRent,
-//       priceRange,
-//       securityDeposit,
-//       roommatesWanted,
-//       genderPreference,
-//       habitPreferences,
-//       purpose,
-//       availableSpace,
-//       pgGenderCategory,
-//       roomTypesAvailable,
-//       mealsProvided,
-//       amenities,
-//       rules,
-//       propertyType,
-//       furnishedStatus,
-//       squareFeet,
-//       bedrooms,
-//       bathrooms,
-//       balconies,
-//       floorNumber,
-//       totalFloors,
-//       tenantPreference,
-//       parking,
-//       expiryDate,
-//       createdBy: req.user.id,
-//     });
-
-//     await room.save();
-//     res.status(201).json({ success: true, room });
-//   } catch (err) {
-//     console.error("Create Room Error:", err);
-//     res.status(400).json({ success: false, message: "Failed to create room" });
-//   }
-// };
-// controllers/roomsController.js
-import AWS from "aws-sdk";
+import B2 from "backblaze-b2";
 import sharp from "sharp";
 import fs from "fs";
 import path from "path";
@@ -102,36 +6,137 @@ import Room from '../models/RoomSchema.js';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 dotenv.config();
-// 🔍 DEBUG: Check all AWS environment variables first
-console.log("AWS Environment Variables Check:", {
-  AWS_ACCESS: process.env.AWS_ACCESS ? "✅ SET" : "❌ NOT SET",
-  AWS_SECRET: process.env.AWS_SECRET ? "✅ SET" : "❌ NOT SET", 
-  AWS_REGION: process.env.AWS_REGION ? `✅ ${process.env.AWS_REGION}` : "❌ NOT SET",
-  AWS_BUCKET: process.env.AWS_BUCKET ? `✅ ${process.env.AWS_BUCKET}` : "❌ NOT SET"
+
+// 🔍 DEBUG: Check all B2 environment variables
+console.log("🔍 B2 Environment Variables Check:", {
+  B2_APP_KEY_ID: process.env.B2_APP_KEY_ID || "❌ NOT SET",
+  B2_APP_KEY: process.env.B2_APP_KEY || "❌ NOT SET", 
+  B2_BUCKET_ID: process.env.B2_BUCKET_ID || "❌ NOT SET",
+  B2_BUCKET_NAME: process.env.B2_BUCKET_NAME || "❌ NOT SET",
+  CDN_URL: process.env.CDN_URL || "❌ NOT SET"
 });
 
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS,
-  secretAccessKey: process.env.AWS_SECRET,
-  region: process.env.AWS_REGION,
+
+// Initialize B2 client
+const b2 = new B2({
+  applicationKeyId: process.env.B2_APP_KEY_ID,
+  applicationKey: process.env.B2_APP_KEY,
 });
 
-const BUCKET_NAME = process.env.AWS_BUCKET;
+const BUCKET_ID = process.env.B2_BUCKET_ID;
+const BUCKET_NAME = process.env.B2_BUCKET_NAME;
+const CDN_URL = process.env.CDN_URL; // Your Cloudflare Worker URL
 
 // Validate required environment variables
+if (!BUCKET_ID) {
+  throw new Error("B2_BUCKET_ID environment variable is not set!");
+}
 if (!BUCKET_NAME) {
-  throw new Error("AWS_BUCKET environment variable is not set!");
+  throw new Error("B2_BUCKET_NAME environment variable is not set!");
 }
-if (!process.env.AWS_ACCESS) {
-  throw new Error("AWS_ACCESS environment variable is not set!");
+if (!process.env.B2_APP_KEY_ID) {
+  throw new Error("B2_APP_KEY_ID environment variable is not set!");
 }
-if (!process.env.AWS_SECRET) {
-  throw new Error("AWS_SECRET environment variable is not set!");
+if (!process.env.B2_APP_KEY) {
+  throw new Error("B2_APP_KEY environment variable is not set!");
 }
-if (!process.env.AWS_REGION) {
-  throw new Error("AWS_REGION environment variable is not set!");
+if (!CDN_URL) {
+  throw new Error("CDN_URL environment variable is not set!");
 }
+
 const watermarkPath = path.join(process.cwd(), "assets/watermark.png");
+
+// 🔐 B2 Authorization Helper (reuse token for 24 hours)
+let b2AuthToken = null;
+let b2UploadUrl = null;
+let b2AuthExpiry = null;
+
+async function getB2Auth() {
+  // Reuse token if still valid (expires after 24 hours)
+  if (b2AuthToken && b2UploadUrl && b2AuthExpiry && Date.now() < b2AuthExpiry) {
+    return { authToken: b2AuthToken, uploadUrl: b2UploadUrl };
+  }
+
+  // Get new authorization
+  await b2.authorize();
+  
+  const uploadUrlResponse = await b2.getUploadUrl({
+    bucketId: BUCKET_ID,
+  });
+
+  b2AuthToken = uploadUrlResponse.data.authorizationToken;
+  b2UploadUrl = uploadUrlResponse.data.uploadUrl;
+  b2AuthExpiry = Date.now() + (23 * 60 * 60 * 1000); // 23 hours (be safe)
+
+  return { authToken: b2AuthToken, uploadUrl: b2UploadUrl };
+}
+
+// 📤 Upload to B2 Helper
+async function uploadToB2(buffer, fileName, contentType = "image/jpeg") {
+  const { authToken, uploadUrl } = await getB2Auth();
+
+  const response = await b2.uploadFile({
+    uploadUrl: uploadUrl,
+    uploadAuthToken: authToken,
+    fileName: fileName,
+    data: buffer,
+    mime: contentType,
+  });
+
+  // Return CDN URL instead of B2 direct URL
+  return `${CDN_URL}/${fileName}`;
+}
+
+// 🗑️ Delete from B2 Helper (for updates)
+async function deleteFromB2(fileUrl) {
+  try {
+    // ⚠️ SAFETY: Skip S3 URLs (legacy data)
+    if (fileUrl.includes('s3.amazonaws.com') || fileUrl.includes('.s3.')) {
+      console.log(`⚠️ Skipping S3 URL (legacy data): ${fileUrl}`);
+      return;
+    }
+
+    // ⚠️ SAFETY: Only delete if it's a B2/CDN URL
+    if (!fileUrl.includes(CDN_URL)) {
+      console.log(`⚠️ Skipping non-B2 URL: ${fileUrl}`);
+      return;
+    }
+
+    // Extract filename from URL
+    const fileName = fileUrl.replace(`${CDN_URL}/`, '').split('?')[0];
+    
+    await b2.authorize();
+    
+    // Get file info
+    const fileList = await b2.listFileNames({
+      bucketId: BUCKET_ID,
+      maxFileCount: 1,
+      prefix: fileName,
+    });
+
+    if (fileList.data.files.length > 0) {
+      const fileId = fileList.data.files[0].fileId;
+      await b2.deleteFileVersion({
+        fileId: fileId,
+        fileName: fileName,
+      });
+      console.log(`✅ Deleted from B2: ${fileName}`);
+    }
+  } catch (error) {
+    console.error(`❌ Error deleting from B2:`, error.message);
+  }
+}
+
+// 🗑️ Safe batch delete (used in updateRoom)
+async function safelyDeleteImagesFromB2(imagesToDelete, roomId) {
+  console.log(`🗑️ Deleting ${imagesToDelete.length} images from B2 for room ${roomId}`);
+  
+  for (const img of imagesToDelete) {
+    if (img.originalUrl) {
+      await deleteFromB2(img.originalUrl);
+    }
+  }
+}
 
 export const uploadRooms = async (req, res) => {
   try {
@@ -167,10 +172,14 @@ export const uploadRooms = async (req, res) => {
       if (!file.buffer || file.buffer.length === 0) continue;
 
       // ✅ BETTER QUALITY - Resize + watermark main image
-      let mainBuffer = await sharp(file.buffer)
-        .resize({ width: 1280, withoutEnlargement: true })
-        .jpeg({ quality: 85 })  // ✅ Increased from 80 to 85
-        .toBuffer();
+   let mainBuffer = await sharp(file.buffer)
+  .resize({ 
+    width: 1280, 
+    withoutEnlargement: true,
+    fit: 'inside'  // ← ADD THIS - keeps aspect ratio, no cropping
+  })
+  .jpeg({ quality: 85 })
+  .toBuffer();
 
       if (fs.existsSync(watermarkPath)) {
         const watermarkBuffer = await sharp(watermarkPath).resize(200).png().toBuffer();
@@ -179,33 +188,24 @@ export const uploadRooms = async (req, res) => {
           .toBuffer();
       }
 
-      // Upload main
+      // 📤 Upload main image to B2
       const mainKey = `properties/${uuidv4()}-${Date.now()}-main.jpg`;
-      const mainResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: mainKey,
-        Body: mainBuffer,
-        ContentType: "image/jpeg",
-      }).promise();
-
-      const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
+      const mainUrl = await uploadToB2(mainBuffer, mainKey, "image/jpeg");
 
       // ✅ FIRST IMAGE = HIGH QUALITY THUMBNAIL
-      if (i === 0) {
-        const thumbBuffer = await sharp(file.buffer)
-          .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px instead of 300px!
-          .jpeg({ quality: 90 })  // ✅ 90 quality - HIGHER than main image!
-          .toBuffer();
+   if (i === 0) {
+  const thumbBuffer = await sharp(file.buffer)
+    .resize({ 
+      width: 800, 
+      withoutEnlargement: true,
+      fit: 'inside'  // ← ADD THIS
+    })
+    .jpeg({ quality: 90 })
+    .toBuffer();
 
         const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-        const thumbResult = await s3.upload({
-          Bucket: BUCKET_NAME,
-          Key: thumbKey,
-          Body: thumbBuffer,
-          ContentType: "image/jpeg",
-        }).promise();
+        const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
 
-        const thumbUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}`;
         thumbnail = { url: thumbUrl };
       }
 
@@ -285,7 +285,7 @@ export const uploadRooms = async (req, res) => {
       totalFloors: getValue("totalFloors") || null,
       tenantPreference: getValue("tenantPreference") || null,
       parking: getValue("parking") || null,
-      expiryDate: getValue("expiryDate") || expiryDate,  // ✅ Auto-set if not provided
+      expiryDate: getValue("expiryDate") || expiryDate,
       createdBy: req.user.id,
     };
 
@@ -314,8 +314,6 @@ export const uploadRooms = async (req, res) => {
     });
   }
 };
-
-
 
 export const updateRoom = async (req, res) => {
   try {
@@ -359,10 +357,10 @@ export const updateRoom = async (req, res) => {
       !existingImagesToKeep.includes(existingImg.originalUrl)
     );
 
-    console.log('🗑️ Images to delete from S3:', imagesToDelete.length);
+    console.log('🗑️ Images to delete from B2:', imagesToDelete.length);
 
     if (imagesToDelete.length > 0) {
-      await safelyDeleteImagesFromS3(imagesToDelete, roomId);
+      await safelyDeleteImagesFromB2(imagesToDelete, roomId);
     }
 
     let images = [];
@@ -381,10 +379,14 @@ export const updateRoom = async (req, res) => {
         if (!file.buffer || file.buffer.length === 0) continue;
 
         // ✅ BETTER QUALITY - Resize + watermark main image
-        let mainBuffer = await sharp(file.buffer)
-          .resize({ width: 1280, withoutEnlargement: true })
-          .jpeg({ quality: 85 })  // ✅ Increased quality
-          .toBuffer();
+      let mainBuffer = await sharp(file.buffer)
+  .resize({ 
+    width: 1280, 
+    withoutEnlargement: true,
+    fit: 'inside'  // ← ADD THIS - keeps aspect ratio, no cropping
+  })
+  .jpeg({ quality: 85 })
+  .toBuffer();
 
         if (fs.existsSync(watermarkPath)) {
           const watermarkBuffer = await sharp(watermarkPath).resize(200).png().toBuffer();
@@ -394,31 +396,19 @@ export const updateRoom = async (req, res) => {
         }
 
         const mainKey = `properties/${uuidv4()}-${Date.now()}-${i}-main.jpg`;
-        const mainResult = await s3.upload({
-          Bucket: BUCKET_NAME,
-          Key: mainKey,
-          Body: mainBuffer,
-          ContentType: "image/jpeg",
-        }).promise();
-
-        const mainUrl = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${mainKey}`;
+        const mainUrl = await uploadToB2(mainBuffer, mainKey, "image/jpeg");
 
         // ✅ HIGH QUALITY THUMBNAIL
         if (i === 0 && images.length === 0) {
           const thumbBuffer = await sharp(file.buffer)
-            .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px
-            .jpeg({ quality: 90 })  // ✅ 90 quality
+            .resize({ width: 800, withoutEnlargement: true })
+            .jpeg({ quality: 90 })
             .toBuffer();
 
           const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-          const thumbResult = await s3.upload({
-            Bucket: BUCKET_NAME,
-            Key: thumbKey,
-            Body: thumbBuffer,
-            ContentType: "image/jpeg",
-          }).promise();
+          const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
 
-          thumbnail = { url: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}` };
+          thumbnail = { url: thumbUrl };
         }
 
         images.push({ originalUrl: mainUrl });
@@ -430,19 +420,14 @@ export const updateRoom = async (req, res) => {
       const thumbFile = Array.isArray(req.files.thumbnail) ? req.files.thumbnail[0] : req.files.thumbnail;
       
       const thumbBuffer = await sharp(thumbFile.buffer)
-        .resize({ width: 800, withoutEnlargement: true })  // ✅ 800px
-        .jpeg({ quality: 90 })  // ✅ 90 quality
+        .resize({ width: 800, withoutEnlargement: true })
+        .jpeg({ quality: 90 })
         .toBuffer();
 
       const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-      const thumbResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: thumbKey,
-        Body: thumbBuffer,
-        ContentType: "image/jpeg",
-      }).promise();
+      const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
 
-      thumbnail = { url: `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${thumbKey}` };
+      thumbnail = { url: thumbUrl };
     }
 
     if (images.length > 0 && !thumbnail) {
@@ -552,47 +537,6 @@ export const updateRoom = async (req, res) => {
       message: "Failed to update room",
       error: error.message,
     });
-  }
-};
-
-const safelyDeleteImagesFromS3 = async (imagesToDelete, roomId) => {
-  try {
-    for (const image of imagesToDelete) {
-      const imageUrl = image.originalUrl;
-      
-      const otherRoomsUsingImage = await Room.countDocuments({
-        'images.originalUrl': imageUrl,
-        _id: { $ne: roomId }
-      });
-
-      if (otherRoomsUsingImage === 0) {
-        console.log(`🗑️ Deleting unused image: ${imageUrl}`);
-        try {
-          await deleteImageFromS3ByUrl(imageUrl);
-          console.log(`✅ Successfully deleted: ${imageUrl}`);
-        } catch (deleteError) {
-          console.error(`❌ Failed to delete ${imageUrl}:`, deleteError.message);
-          continue;
-        }
-      } else {
-        console.log(`🔒 Keeping image (used by ${otherRoomsUsingImage} other rooms): ${imageUrl}`);
-      }
-    }
-  } catch (error) {
-    console.error('Error in safe image deletion:', error);
-  }
-};
-
-const deleteImageFromS3ByUrl = async (imageUrl) => {
-  try {
-    const key = imageUrl.split('.amazonaws.com/')[1];
-    await s3.deleteObject({
-      Bucket: BUCKET_NAME,
-      Key: key
-    }).promise();
-    console.log(`✅ Deleted from S3: ${key}`);
-  } catch (error) {
-    console.error('❌ Failed to delete from S3:', imageUrl, error);
   }
 };
 
