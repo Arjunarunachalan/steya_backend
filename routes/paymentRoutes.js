@@ -38,7 +38,7 @@ router.post('/create-order', async (req, res) => {
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_Re0Y2zBv6tY6f1',
+      keyId: process.env.RAZORPAY_KEY_ID ,
     });
 
   } catch (error) {
