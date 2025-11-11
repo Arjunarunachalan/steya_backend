@@ -1,21 +1,9 @@
 import B2 from "backblaze-b2";
 import sharp from "sharp";
-import fs from "fs";
-import path from "path";
 import Room from '../models/RoomSchema.js';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 dotenv.config();
-
-// 🔍 DEBUG: Check all B2 environment variables
-console.log("🔍 B2 Environment Variables Check:", {
-  B2_APP_KEY_ID: process.env.B2_APP_KEY_ID || "❌ NOT SET",
-  B2_APP_KEY: process.env.B2_APP_KEY || "❌ NOT SET", 
-  B2_BUCKET_ID: process.env.B2_BUCKET_ID || "❌ NOT SET",
-  B2_BUCKET_NAME: process.env.B2_BUCKET_NAME || "❌ NOT SET",
-  CDN_URL: process.env.CDN_URL || "❌ NOT SET"
-});
-
 
 // Initialize B2 client
 const b2 = new B2({
@@ -25,55 +13,45 @@ const b2 = new B2({
 
 const BUCKET_ID = process.env.B2_BUCKET_ID;
 const BUCKET_NAME = process.env.B2_BUCKET_NAME;
-const CDN_URL = process.env.CDN_URL; // Your Cloudflare Worker URL
+const CDN_URL = process.env.CDN_URL;
 
-// Validate required environment variables
-if (!BUCKET_ID) {
-  throw new Error("B2_BUCKET_ID environment variable is not set!");
-}
-if (!BUCKET_NAME) {
-  throw new Error("B2_BUCKET_NAME environment variable is not set!");
-}
-if (!process.env.B2_APP_KEY_ID) {
-  throw new Error("B2_APP_KEY_ID environment variable is not set!");
-}
-if (!process.env.B2_APP_KEY) {
-  throw new Error("B2_APP_KEY environment variable is not set!");
-}
-if (!CDN_URL) {
-  throw new Error("CDN_URL environment variable is not set!");
+// Validate environment variables
+if (!BUCKET_ID || !BUCKET_NAME || !process.env.B2_APP_KEY_ID || !process.env.B2_APP_KEY || !CDN_URL) {
+  throw new Error("Missing required B2 environment variables!");
 }
 
-const watermarkPath = path.join(process.cwd(), "assets/watermark.png");
-
-// 🔐 B2 Authorization Helper (reuse token for 24 hours)
-let b2AuthToken = null;
-let b2UploadUrl = null;
+// 🔐 B2 Authorization Cache (reuse for 23 hours)
+let b2Authorized = false;
 let b2AuthExpiry = null;
 
-async function getB2Auth() {
-  // Reuse token if still valid (expires after 24 hours)
-  if (b2AuthToken && b2UploadUrl && b2AuthExpiry && Date.now() < b2AuthExpiry) {
-    return { authToken: b2AuthToken, uploadUrl: b2UploadUrl };
+async function ensureB2Authorized() {
+  if (b2Authorized && b2AuthExpiry && Date.now() < b2AuthExpiry) {
+    return;
   }
 
-  // Get new authorization
   await b2.authorize();
+  b2Authorized = true;
+  b2AuthExpiry = Date.now() + (23 * 60 * 60 * 1000);
+  console.log('✅ B2 authorized');
+}
+
+// ⚡ GET FRESH UPLOAD URL (for each parallel upload)
+async function getUploadUrl() {
+  await ensureB2Authorized();
   
   const uploadUrlResponse = await b2.getUploadUrl({
     bucketId: BUCKET_ID,
   });
 
-  b2AuthToken = uploadUrlResponse.data.authorizationToken;
-  b2UploadUrl = uploadUrlResponse.data.uploadUrl;
-  b2AuthExpiry = Date.now() + (23 * 60 * 60 * 1000); // 23 hours (be safe)
-
-  return { authToken: b2AuthToken, uploadUrl: b2UploadUrl };
+  return {
+    authToken: uploadUrlResponse.data.authorizationToken,
+    uploadUrl: uploadUrlResponse.data.uploadUrl
+  };
 }
 
-// 📤 Upload to B2 Helper
+// 📤 Upload to B2 Helper (gets fresh URL each time)
 async function uploadToB2(buffer, fileName, contentType = "image/jpeg") {
-  const { authToken, uploadUrl } = await getB2Auth();
+  const { authToken, uploadUrl } = await getUploadUrl();
 
   const response = await b2.uploadFile({
     uploadUrl: uploadUrl,
@@ -83,31 +61,25 @@ async function uploadToB2(buffer, fileName, contentType = "image/jpeg") {
     mime: contentType,
   });
 
-  // Return CDN URL instead of B2 direct URL
   return `${CDN_URL}/${fileName}`;
 }
 
-// 🗑️ Delete from B2 Helper (for updates)
+// 🗑️ Delete from B2 Helper
 async function deleteFromB2(fileUrl) {
   try {
-    // ⚠️ SAFETY: Skip S3 URLs (legacy data)
     if (fileUrl.includes('s3.amazonaws.com') || fileUrl.includes('.s3.')) {
-      console.log(`⚠️ Skipping S3 URL (legacy data): ${fileUrl}`);
+      console.log(`⚠️ Skipping S3 URL: ${fileUrl}`);
       return;
     }
 
-    // ⚠️ SAFETY: Only delete if it's a B2/CDN URL
     if (!fileUrl.includes(CDN_URL)) {
       console.log(`⚠️ Skipping non-B2 URL: ${fileUrl}`);
       return;
     }
 
-    // Extract filename from URL
     const fileName = fileUrl.replace(`${CDN_URL}/`, '').split('?')[0];
+    await ensureB2Authorized();
     
-    await b2.authorize();
-    
-    // Get file info
     const fileList = await b2.listFileNames({
       bucketId: BUCKET_ID,
       maxFileCount: 1,
@@ -116,34 +88,64 @@ async function deleteFromB2(fileUrl) {
 
     if (fileList.data.files.length > 0) {
       const fileId = fileList.data.files[0].fileId;
-      await b2.deleteFileVersion({
-        fileId: fileId,
-        fileName: fileName,
-      });
-      console.log(`✅ Deleted from B2: ${fileName}`);
+      await b2.deleteFileVersion({ fileId, fileName });
+      console.log(`✅ Deleted: ${fileName}`);
     }
   } catch (error) {
-    console.error(`❌ Error deleting from B2:`, error.message);
+    console.error(`❌ Delete error:`, error.message);
   }
 }
 
-// 🗑️ Safe batch delete (used in updateRoom)
+// 🗑️ Batch delete helper
 async function safelyDeleteImagesFromB2(imagesToDelete, roomId) {
-  console.log(`🗑️ Deleting ${imagesToDelete.length} images from B2 for room ${roomId}`);
+  console.log(`🗑️ Deleting ${imagesToDelete.length} images for room ${roomId}`);
   
-  for (const img of imagesToDelete) {
-    if (img.originalUrl) {
-      await deleteFromB2(img.originalUrl);
-    }
-  }
+  // ⚡ DELETE IN PARALLEL
+  await Promise.all(
+    imagesToDelete.map(img => img.originalUrl ? deleteFromB2(img.originalUrl) : Promise.resolve())
+  );
 }
 
+// ⚡ OPTIMIZED: Process single image (NO WATERMARK)
+async function processImage(fileBuffer, timestamp, index) {
+  const mainBuffer = await sharp(fileBuffer)
+    .resize({ 
+      width: 1280, 
+      withoutEnlargement: true,
+      fit: 'inside'
+    })
+    .jpeg({ quality: 85, mozjpeg: true })
+    .toBuffer();
+
+  const mainKey = `properties/${uuidv4()}-${timestamp}-${index}.jpg`;
+  const mainUrl = await uploadToB2(mainBuffer, mainKey, "image/jpeg");
+
+  return mainUrl;
+}
+
+// ⚡ OPTIMIZED: Process thumbnail (ONLY for first image)
+async function processThumbnail(fileBuffer, timestamp) {
+  const thumbBuffer = await sharp(fileBuffer)
+    .resize({ 
+      width: 800, 
+      withoutEnlargement: true,
+      fit: 'inside'
+    })
+    .jpeg({ quality: 90, mozjpeg: true })
+    .toBuffer();
+
+  const thumbKey = `properties/thumbs/${uuidv4()}-${timestamp}-thumb.jpg`;
+  const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
+
+  return thumbUrl;
+}
+
+// ⚡⚡⚡ ULTRA-FAST UPLOAD - Parallel Processing with Fresh Upload URLs
 export const uploadRooms = async (req, res) => {
   try {
-    let images = [];
-    let thumbnail = null;
-
-    // Collect files
+    const timestamp = Date.now();
+    
+    // 1️⃣ Collect files
     let allFiles = [];
     if (req.files) {
       if (req.files.images && Array.isArray(req.files.images)) {
@@ -165,52 +167,31 @@ export const uploadRooms = async (req, res) => {
       return res.status(400).json({ success: false, message: "No files uploaded" });
     }
 
-    // Loop through files
-    for (let i = 0; i < allFiles.length; i++) {
-      const file = allFiles[i];
+    console.log(`📸 Processing ${allFiles.length} images...`);
 
-      if (!file.buffer || file.buffer.length === 0) continue;
+    // ⚡ 2️⃣ PROCESS ALL IMAGES IN PARALLEL (each gets its own upload URL)
+    const imagePromises = allFiles.map((file, index) => {
+      if (!file.buffer || file.buffer.length === 0) return null;
+      return processImage(file.buffer, timestamp, index);
+    });
 
-      // ✅ BETTER QUALITY - Resize + watermark main image
-   let mainBuffer = await sharp(file.buffer)
-  .resize({ 
-    width: 1280, 
-    withoutEnlargement: true,
-    fit: 'inside'  // ← ADD THIS - keeps aspect ratio, no cropping
-  })
-  .jpeg({ quality: 85 })
-  .toBuffer();
+    // ⚡ 3️⃣ PROCESS THUMBNAIL (only first image)
+    const thumbnailPromise = allFiles[0]?.buffer 
+      ? processThumbnail(allFiles[0].buffer, timestamp)
+      : null;
 
-      if (fs.existsSync(watermarkPath)) {
-        const watermarkBuffer = await sharp(watermarkPath).resize(200).png().toBuffer();
-        mainBuffer = await sharp(mainBuffer)
-          .composite([{ input: watermarkBuffer, gravity: "southeast", blend: "overlay" }])
-          .toBuffer();
-      }
+    // ⚡ 4️⃣ WAIT FOR ALL UPLOADS TO COMPLETE (parallel - each with fresh token)
+    const [imageUrls, thumbnailUrl] = await Promise.all([
+      Promise.all(imagePromises),
+      thumbnailPromise
+    ]);
 
-      // 📤 Upload main image to B2
-      const mainKey = `properties/${uuidv4()}-${Date.now()}-main.jpg`;
-      const mainUrl = await uploadToB2(mainBuffer, mainKey, "image/jpeg");
+    // 5️⃣ Filter out null values and format
+    const images = imageUrls
+      .filter(url => url !== null)
+      .map(url => ({ originalUrl: url }));
 
-      // ✅ FIRST IMAGE = HIGH QUALITY THUMBNAIL
-   if (i === 0) {
-  const thumbBuffer = await sharp(file.buffer)
-    .resize({ 
-      width: 800, 
-      withoutEnlargement: true,
-      fit: 'inside'  // ← ADD THIS
-    })
-    .jpeg({ quality: 90 })
-    .toBuffer();
-
-        const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-        const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
-
-        thumbnail = { url: thumbUrl };
-      }
-
-      images.push({ originalUrl: mainUrl });
-    }
+    const thumbnail = thumbnailUrl ? { url: thumbnailUrl } : null;
 
     if (images.length === 0) {
       return res.status(400).json({
@@ -219,27 +200,35 @@ export const uploadRooms = async (req, res) => {
       });
     }
 
-    // Parse location
+    console.log(`✅ ${images.length} images uploaded successfully`);
+
+    // 6️⃣ Parse location
     let parsedLocation;
     if (req.body.location) {
       try {
         let locationValue = Array.isArray(req.body.location)
           ? req.body.location[req.body.location.length - 1]
           : req.body.location;
-        parsedLocation = typeof locationValue === "string" ? JSON.parse(locationValue) : locationValue;
+        parsedLocation = typeof locationValue === "string" 
+          ? JSON.parse(locationValue) 
+          : locationValue;
       } catch {
         parsedLocation = null;
       }
     }
 
-    // Helpers
+    // Helper functions
     const parseJSON = (field) => {
       if (!req.body[field]) return undefined;
       try {
-        let value = Array.isArray(req.body[field]) ? req.body[field][req.body[field].length - 1] : req.body[field];
+        let value = Array.isArray(req.body[field]) 
+          ? req.body[field][req.body[field].length - 1] 
+          : req.body[field];
         return JSON.parse(value);
       } catch {
-        return Array.isArray(req.body[field]) ? req.body[field][req.body[field].length - 1] : req.body[field];
+        return Array.isArray(req.body[field]) 
+          ? req.body[field][req.body[field].length - 1] 
+          : req.body[field];
       }
     };
 
@@ -248,11 +237,11 @@ export const uploadRooms = async (req, res) => {
       return Array.isArray(value) ? value[value.length - 1] : value;
     };
 
-    // ✅ AUTO-SET EXPIRY DATE (30 days from now)
+    // Auto-set expiry date
     const expiryDate = new Date();
     expiryDate.setDate(expiryDate.getDate() + 30);
 
-    // Create room doc
+    // 7️⃣ Create room document
     const roomData = {
       category: getValue("category") || null,
       title: getValue("title") || "",
@@ -290,10 +279,6 @@ export const uploadRooms = async (req, res) => {
     };
 
     const room = new Room(roomData);
-    console.log('====================================');
-    console.log(roomData, "Room Data");
-    console.log('====================================');
-
     await room.save();
 
     res.status(201).json({
@@ -315,15 +300,12 @@ export const uploadRooms = async (req, res) => {
   }
 };
 
+// ⚡⚡⚡ ULTRA-FAST UPDATE - Parallel Processing with Fresh Upload URLs
 export const updateRoom = async (req, res) => {
   try {
-    console.log('🔍 COMPLETE REQUEST DEBUG:');
-    console.log('1. req.files:', req.files);
-    console.log('2. req.body keys:', Object.keys(req.body));
-    console.log('3. req.body existingImages:', req.body.existingImages);
-    
     const { roomId } = req.params;
     const userId = req.user.id;
+    const timestamp = Date.now();
 
     console.log(`🔄 UPDATE ROOM: User ${userId} → Room ${roomId}`);
 
@@ -335,109 +317,90 @@ export const updateRoom = async (req, res) => {
     if (!existingRoom) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Room not found or you do not have permission to edit this room' 
+        message: 'Room not found or unauthorized' 
       });
     }
 
-    const existingImagesToKeep = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
+    const existingImagesToKeep = req.body.existingImages 
+      ? JSON.parse(req.body.existingImages) 
+      : [];
     
-    const imageFiles = req.files && req.files.images ? 
-      (Array.isArray(req.files.images) ? req.files.images : [req.files.images]) : [];
-    const totalNewFiles = imageFiles.length + (req.files && req.files.thumbnail ? 1 : 0);
+    const imageFiles = req.files && req.files.images 
+      ? (Array.isArray(req.files.images) ? req.files.images : [req.files.images]) 
+      : [];
 
-    console.log('📸 Image Update Info:', {
-      currentImages: existingRoom.images.length,
-      imagesToKeep: existingImagesToKeep.length,
-      newFiles: totalNewFiles,
-      imageFiles: imageFiles.length,
-      hasThumbnail: !!(req.files && req.files.thumbnail)
+    console.log('📸 Image Update:', {
+      current: existingRoom.images.length,
+      keeping: existingImagesToKeep.length,
+      newFiles: imageFiles.length
     });
 
+    // ⚡ DELETE OLD IMAGES IN PARALLEL (background)
     const imagesToDelete = existingRoom.images.filter(existingImg => 
       !existingImagesToKeep.includes(existingImg.originalUrl)
     );
 
-    console.log('🗑️ Images to delete from B2:', imagesToDelete.length);
-
     if (imagesToDelete.length > 0) {
-      await safelyDeleteImagesFromB2(imagesToDelete, roomId);
+      console.log('🗑️ Deleting:', imagesToDelete.length);
+      safelyDeleteImagesFromB2(imagesToDelete, roomId).catch(err => 
+        console.error('Background delete error:', err)
+      );
     }
 
-    let images = [];
+    // Start with existing images
+    let images = existingImagesToKeep.map(url => ({ originalUrl: url }));
     let thumbnail = null;
 
-    existingImagesToKeep.forEach(url => {
-      images.push({ originalUrl: url });
-    });
-
+    // ⚡ PROCESS NEW IMAGES IN PARALLEL (each gets fresh upload URL)
     if (imageFiles.length > 0) {
       console.log('📤 Processing new images:', imageFiles.length);
 
-      for (let i = 0; i < imageFiles.length; i++) {
-        const file = imageFiles[i];
+      const imagePromises = imageFiles.map((file, index) => {
+        if (!file.buffer || file.buffer.length === 0) return null;
+        return processImage(file.buffer, timestamp, index);
+      });
 
-        if (!file.buffer || file.buffer.length === 0) continue;
+      // ⚡ PROCESS THUMBNAIL (only if first image and no existing images)
+      const thumbnailPromise = (imageFiles[0]?.buffer && images.length === 0)
+        ? processThumbnail(imageFiles[0].buffer, timestamp)
+        : null;
 
-        // ✅ BETTER QUALITY - Resize + watermark main image
-      let mainBuffer = await sharp(file.buffer)
-  .resize({ 
-    width: 1280, 
-    withoutEnlargement: true,
-    fit: 'inside'  // ← ADD THIS - keeps aspect ratio, no cropping
-  })
-  .jpeg({ quality: 85 })
-  .toBuffer();
+      // ⚡ WAIT FOR ALL UPLOADS
+      const [newImageUrls, newThumbnailUrl] = await Promise.all([
+        Promise.all(imagePromises),
+        thumbnailPromise
+      ]);
 
-        if (fs.existsSync(watermarkPath)) {
-          const watermarkBuffer = await sharp(watermarkPath).resize(200).png().toBuffer();
-          mainBuffer = await sharp(mainBuffer)
-            .composite([{ input: watermarkBuffer, gravity: "southeast", blend: "overlay" }])
-            .toBuffer();
-        }
-
-        const mainKey = `properties/${uuidv4()}-${Date.now()}-${i}-main.jpg`;
-        const mainUrl = await uploadToB2(mainBuffer, mainKey, "image/jpeg");
-
-        // ✅ HIGH QUALITY THUMBNAIL
-        if (i === 0 && images.length === 0) {
-          const thumbBuffer = await sharp(file.buffer)
-            .resize({ width: 800, withoutEnlargement: true })
-            .jpeg({ quality: 90 })
-            .toBuffer();
-
-          const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-          const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
-
-          thumbnail = { url: thumbUrl };
-        }
-
-        images.push({ originalUrl: mainUrl });
-      }
-    }
-
-    // ✅ Process separate thumbnail upload
-    if (req.files && req.files.thumbnail && !thumbnail) {
-      const thumbFile = Array.isArray(req.files.thumbnail) ? req.files.thumbnail[0] : req.files.thumbnail;
+      // Add new images
+      const newImages = newImageUrls
+        .filter(url => url !== null)
+        .map(url => ({ originalUrl: url }));
       
-      const thumbBuffer = await sharp(thumbFile.buffer)
-        .resize({ width: 800, withoutEnlargement: true })
-        .jpeg({ quality: 90 })
-        .toBuffer();
-
-      const thumbKey = `properties/thumbs/${uuidv4()}-${Date.now()}-thumb.jpg`;
-      const thumbUrl = await uploadToB2(thumbBuffer, thumbKey, "image/jpeg");
-
-      thumbnail = { url: thumbUrl };
-    }
-
-    if (images.length > 0 && !thumbnail) {
-      if (existingImagesToKeep.length > 0) {
-        thumbnail = { url: existingImagesToKeep[0] };
-      } else if (images.length > 0) {
-        thumbnail = { url: images[0].originalUrl };
+      images = [...images, ...newImages];
+      
+      if (newThumbnailUrl) {
+        thumbnail = { url: newThumbnailUrl };
       }
+
+      console.log(`✅ ${newImages.length} new images uploaded`);
     }
 
+    // Handle separate thumbnail upload
+    if (req.files && req.files.thumbnail && !thumbnail) {
+      const thumbFile = Array.isArray(req.files.thumbnail) 
+        ? req.files.thumbnail[0] 
+        : req.files.thumbnail;
+      
+      const thumbnailUrl = await processThumbnail(thumbFile.buffer, timestamp);
+      thumbnail = { url: thumbnailUrl };
+    }
+
+    // Set thumbnail from first image if none exists
+    if (images.length > 0 && !thumbnail) {
+      thumbnail = { url: images[0].originalUrl };
+    }
+
+    // Parse helpers
     const parseJSON = (field) => {
       if (!req.body[field]) return undefined;
       try {
@@ -467,10 +430,11 @@ export const updateRoom = async (req, res) => {
           ? JSON.parse(locationValue) 
           : locationValue;
       } catch (error) {
-        console.log('Location parse error, keeping existing:', error);
+        console.log('Location parse error, keeping existing');
       }
     }
 
+    // Build update data
     const updateData = {
       category: getValue("category") || existingRoom.category,
       title: getValue("title") || existingRoom.title,
@@ -540,14 +504,12 @@ export const updateRoom = async (req, res) => {
   }
 };
 
-
+// Keep filter functions unchanged
 function buildFilterQuery(filterData, category) {
   const query = {};
   
   Object.keys(filterData).forEach(key => {
     const filter = filterData[key];
-    
-    // Skip if filter is not selected or has no value
     if (!filter.selected) return;
     
     let filterQuery = null;
@@ -565,7 +527,6 @@ function buildFilterQuery(filterData, category) {
     }
   });
   
-  console.log('Built filter query:', query);
   return query;
 }
 
@@ -583,7 +544,7 @@ function buildSharedFilter(key, filter) {
       if (filter.options && Array.isArray(filter.options)) {
         const selectedOptions = filter.options
           .filter(opt => opt.selected)
-          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+          .map(opt => opt.value);
         return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
       }
       return null;
@@ -597,7 +558,6 @@ function buildSharedFilter(key, filter) {
 function buildPgFilter(key, filter) {
   switch (key) {
     case 'priceRange':
-      // ✅ SIMPLE FIX: Just check if property's price range overlaps with filter
       return {
         'priceRange.min': { $lte: filter.currentMax || filter.max },
         'priceRange.max': { $gte: filter.currentMin || filter.min }
@@ -611,7 +571,7 @@ function buildPgFilter(key, filter) {
       if (filter.options && Array.isArray(filter.options)) {
         const selectedOptions = filter.options
           .filter(opt => opt.selected)
-          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+          .map(opt => opt.value);
         return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
       }
       return null;
@@ -633,12 +593,12 @@ function buildRentalFilter(key, filter) {
       };
     case 'propertyType':
     case 'furnishedStatus':
-    case 'tenantPreference': // ✅ FIXED: Changed from 'preferredTenant'
+    case 'tenantPreference':
     case 'parking':
       if (filter.options && Array.isArray(filter.options)) {
         const selectedOptions = filter.options
           .filter(opt => opt.selected)
-          .map(opt => opt.value); // ✅ Use 'value' instead of 'label'
+          .map(opt => opt.value);
         return selectedOptions.length > 0 ? { $in: selectedOptions } : null;
       }
       return null;
@@ -660,44 +620,51 @@ export const getRooms = async (req, res) => {
       filters 
     } = req.query;
 
+    // Validate required params
     if (!lat || !lng) {
-      return res.status(400).json({ success: false, message: "lat & lng required" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "Location coordinates required" 
+      });
     }
 
     const latNum = parseFloat(lat);
     const lngNum = parseFloat(lng);
 
-    // Build base match stage with location AND exclusion filters
-    const baseMatchStage = {
+    // Validate coordinates
+    if (isNaN(latNum) || isNaN(lngNum)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid coordinates" 
+      });
+    }
+
+    const limitNum = Math.min(parseInt(limit) || 15, 50); // Max 50 per request
+    const skipNum = Math.max(parseInt(skip) || 0, 0);
+
+    // Build optimized query for $geoNear
+    const geoNearQuery = {
+      // Exclude deleted rooms
+      $or: [
+        { isDeleted: { $exists: false } },
+        { isDeleted: false }
+      ],
+      // Exclude blocked rooms  
       $and: [
-        {
-          $or: [
-            { location: { $exists: true, $ne: null } },
-            { 'location.coordinates': { $exists: true, $ne: null } }
-          ]
-        },
-        // Exclude deleted rooms
-        { 
-          $or: [
-            { isDeleted: { $exists: false } },
-            { isDeleted: false }
-          ]
-        },
-        // Exclude blocked rooms
         { 
           $or: [
             { isBlocked: { $exists: false } },
             { isBlocked: false }
           ]
         },
-        // Only include active rooms
+        // Only active rooms
         { 
           $or: [
             { isActive: { $exists: false } },
             { isActive: true }
           ]
         },
-        // Exclude expired rooms
+        // Not expired
         {
           $or: [
             { expiryDate: { $exists: false } },
@@ -707,99 +674,159 @@ export const getRooms = async (req, res) => {
       ]
     };
 
-    // Add category to base match if provided
+    // Add category filter if specified
     if (category && category !== 'all') {
-      baseMatchStage.$and.push({ category });
+      geoNearQuery.category = category;
     }
 
-    // Parse and apply filters if provided
-    let filterMatchStage = {};
+    // Parse and add custom filters
     if (filters && filters !== '{}') {
       try {
         const filterData = JSON.parse(filters);
         const filterQuery = buildFilterQuery(filterData, category);
         
-        // Only add filter query if it has valid conditions
         if (Object.keys(filterQuery).length > 0) {
-          Object.assign(filterMatchStage, filterQuery);
+          // Merge filter conditions into $and array
+          if (filterQuery.$and) {
+            geoNearQuery.$and = [...geoNearQuery.$and, ...filterQuery.$and];
+          } else {
+            Object.assign(geoNearQuery, filterQuery);
+          }
         }
       } catch (parseError) {
         console.error("Filter parsing error:", parseError);
-        return res.status(400).json({ success: false, message: "Invalid filter format" });
+        return res.status(400).json({ 
+          success: false, 
+          message: "Invalid filter format" 
+        });
       }
     }
 
-    // Combine base match with filter match
-    const finalMatchStage = { ...baseMatchStage };
-    if (Object.keys(filterMatchStage).length > 0) {
-      finalMatchStage.$and.push(filterMatchStage);
-    }
-
-    // If no $and conditions remain, remove $and
-    if (finalMatchStage.$and && finalMatchStage.$and.length === 0) {
-      delete finalMatchStage.$and;
-    }
-
+    // Optimized aggregation pipeline
     const aggregationPipeline = [
       {
         $geoNear: {
-          near: { type: "Point", coordinates: [lngNum, latNum] },
+          near: { 
+            type: "Point", 
+            coordinates: [lngNum, latNum] 
+          },
           distanceField: "distance",
           spherical: true,
-          distanceMultiplier: 0.001, // Convert to kilometers
-          query: finalMatchStage.$and && finalMatchStage.$and.length > 0 ? finalMatchStage : {},
-          maxDistance: 45000, // 45 km max search radius
+          distanceMultiplier: 0.001, // km
+          query: geoNearQuery,
+          maxDistance: 45000, // 45km radius
         }
       },
       { 
         $sort: { 
-          distance: 1, // Nearest first
-          createdAt: -1 // Then by latest posts
+          distance: 1,
+          createdAt: -1 
         } 
       },
-      { $skip: parseInt(skip) },
-      { $limit: parseInt(limit) },
+      { $skip: skipNum },
+      { $limit: limitNum },
+      // ✅ Project ALL needed fields for cards
+      {
+        $project: {
+          // Common fields
+          title: 1,
+          description: 1,
+          category: 1,
+          thumbnail: 1,
+          images: 1,
+          location: 1,
+          distance: 1,
+          createdAt: 1,
+          
+          // Financial
+          monthlyRent: 1,
+          priceRange: 1,
+          securityDeposit: 1,
+          
+          // Shared Room fields
+          roommatesWanted: 1,
+          genderPreference: 1,
+          habitPreferences: 1,
+          
+          // PG/Hostel fields
+          availableSpace: 1,
+          pgGenderCategory: 1,
+          roomTypesAvailable: 1,
+          mealsProvided: 1,
+          amenities: 1,
+          rules: 1,
+          
+          // Flat/Home fields
+          propertyType: 1,
+          furnishedStatus: 1,
+          bedrooms: 1,
+          bathrooms: 1,
+          balconies: 1,
+          squareFeet: 1,
+          floorNumber: 1,
+          totalFloors: 1,
+          tenantPreference: 1,
+          parking: 1,
+          
+          // Engagement
+          views: 1,
+          likes: 1,
+          favorites: 1,
+          
+          // Owner info
+          createdBy: 1
+        }
+      }
     ];
 
-    console.log('Final aggregation pipeline:', JSON.stringify(aggregationPipeline, null, 2));
+    console.log('🔍 Query:', JSON.stringify({ category, skipNum, limitNum }));
+    
     const rooms = await Room.aggregate(aggregationPipeline);
     
-    // Add distance info to each room
-    const roomsWithDistanceInfo = rooms.map(room => {
-      const straightLineDistance = room.distance; // in km
+    // Calculate distance info efficiently
+    const roomsWithDistance = rooms.map(room => {
+      const straightLineKm = room.distance;
+      const roadDistanceKm = straightLineKm * 1.4; // Approximate
       
-      // Calculate approximate road distance (straight-line * 1.4)
-      const approximateRoadDistanceKm = straightLineDistance * 1.4;
+      let distance, label;
       
-      let individualDistance;
-      let approximateRoadDistance;
-      
-      // If less than 1 km, show in meters
-      if (approximateRoadDistanceKm < 1) {
-        approximateRoadDistance = Math.round(approximateRoadDistanceKm * 1000); // Convert to meters
-        individualDistance = `${approximateRoadDistance} m`;
+      if (roadDistanceKm < 1) {
+        distance = Math.round(roadDistanceKm * 1000);
+        label = `${distance} m`;
       } else {
-        approximateRoadDistance = Math.round(approximateRoadDistanceKm);
-        individualDistance = `${approximateRoadDistance} km`;
+        distance = Math.round(roadDistanceKm * 10) / 10; // 1 decimal
+        label = `${distance} km`;
       }
       
       return {
         ...room,
-        approximateRoadDistance: approximateRoadDistance,
-        individualDistance: individualDistance,
-        distanceLabel: `${individualDistance} away`
+        approximateRoadDistance: roadDistanceKm < 1 
+          ? Math.round(roadDistanceKm * 1000) 
+          : Math.round(roadDistanceKm),
+        individualDistance: label,
+        distanceLabel: `${label} away`
       };
     });
     
     res.json({ 
       success: true, 
-      rooms: roomsWithDistanceInfo,
-      message: `Found ${rooms.length} rooms`,
-      hasMore: rooms.length === parseInt(limit)
+      rooms: roomsWithDistance,
+      count: rooms.length,
+      hasMore: rooms.length === limitNum,
+      pagination: {
+        skip: skipNum,
+        limit: limitNum,
+        returned: rooms.length
+      }
     });
+
   } catch (err) {
-    console.error("Get Rooms Error:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch rooms" });
+    console.error("❌ Get Rooms Error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch rooms",
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
   }
 };
 

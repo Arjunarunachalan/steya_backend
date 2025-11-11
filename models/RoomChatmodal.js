@@ -29,6 +29,7 @@ const chatRoomSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+   contactPhone: String,
   lastMessage: {
     type: String,
     default: null

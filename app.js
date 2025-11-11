@@ -19,31 +19,31 @@ app.use(cors());
 app.use(express.json());
 
 // 🔒 General API rate limiter
-const apiLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 60, // 60 requests per minute
-  message: 'Too many requests, please slow down.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// const apiLimiter = rateLimit({
+//   windowMs: 1 * 60 * 1000, // 1 minute
+//   max: 60, // 60 requests per minute
+//   message: 'Too many requests, please slow down.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
 
-// 🔒 Chat rate limiter (stricter to prevent spam)
-const chatLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 30, // 30 messages per minute
-  message: 'Slow down with the messages!',
-});
+// // 🔒 Chat rate limiter (stricter to prevent spam)
+// const chatLimiter = rateLimit({
+//   windowMs: 1 * 60 * 1000, // 1 minute
+//   max: 30, // 30 messages per minute
+//   message: 'Slow down with the messages!',
+// });
 
 // Routes
 app.use('/api/auth', authRoute); // No limiter - Google handles it
-app.use('/api', apiLimiter, userRoutes);
+app.use('/api', userRoutes);
 app.use('/api/payment', paymentRoutes);
-app.use("/api", apiLimiter, roomRoutes);
-app.use('/api/chat', chatLimiter, chatRoomRoutes); // Stricter for chat
-app.use('/api/push', apiLimiter, pushTokenRoutes);
-app.use('/api/reports', apiLimiter, reportRoutes);
-app.use('/api/posts', apiLimiter, myPostsRoutes);
-app.use('/api', apiLimiter, donationRoutes);
-app.use('/api/bug', apiLimiter, bugRoutes);
+app.use("/api",  roomRoutes);
+app.use('/api/chat', chatRoomRoutes); // Stricter for chat
+app.use('/api/push',  pushTokenRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/posts',  myPostsRoutes);
+app.use('/api',  donationRoutes);
+app.use('/api/bug', bugRoutes);
 
 export default app;

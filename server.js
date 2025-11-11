@@ -1,4 +1,4 @@
-// server.js - FIXED ONLINE/OFFLINE STATUS + CHAT LIST REAL-TIME UPDATES
+// server.js - FIXED with Owner Phone Number Support
 import http from 'http';
 import { Server } from 'socket.io';
 import app from './app.js';
@@ -6,6 +6,8 @@ import connectDB from './config/db.js';
 import Chat from './models/chatmodal.js';
 import ChatRoom from './models/RoomChatmodal.js';
 import User from './models/userModal.js';
+import Room from './models/RoomSchema.js';
+
 import dotenv from 'dotenv';
 import { sendPushNotification } from './utils/pushNotificationService.js';
 import { startCleanupJob } from './services/cleanupJob.js';
@@ -46,7 +48,6 @@ const cleanupOldMessages = () => {
 
 setInterval(cleanupOldMessages, 60000);
 
-// FIXED: Enhanced online status broadcasting function
 const broadcastOnlineStatus = async (roomId, excludedSocketId = null) => {
   try {
     const roomIdStr = roomId.toString();
@@ -80,7 +81,6 @@ const broadcastOnlineStatus = async (roomId, excludedSocketId = null) => {
   }
 };
 
-// NEW: Helper function to notify participants about chat list updates
 const notifyParticipantsOfChatUpdate = async (roomId, excludedUserId = null) => {
   try {
     const room = await ChatRoom.findById(roomId).populate('participants', '_id');
@@ -91,12 +91,10 @@ const notifyParticipantsOfChatUpdate = async (roomId, excludedUserId = null) => 
     room.participants.forEach(participant => {
       const participantId = participant._id.toString();
       
-      // Don't notify the user who triggered the update (optional)
       if (excludedUserId && participantId === excludedUserId.toString()) {
         return;
       }
 
-      // Emit to user's personal room for chat list updates
       io.to(`user_${participantId}`).emit('newMessageInAnyRoom', {
         roomId: roomId.toString(),
         timestamp: new Date()
@@ -115,7 +113,6 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   console.log('✅ User connected', socket.id, 'at', new Date().toISOString());
 
-  // SIMPLIFIED: userOnline only for app-level presence (optional)
   socket.on('userOnline', ({ userId }) => {
     if (!userId) return;
     
@@ -126,7 +123,6 @@ io.on('connection', (socket) => {
     console.log(`👤 User ${userIdStr} app is online (socket: ${socket.id})`);
   });
 
-  // NEW: Join user's personal room for chat list notifications
   socket.on('joinUserRoom', ({ userId }) => {
     if (!userId) return;
     
@@ -140,7 +136,6 @@ io.on('connection', (socket) => {
     console.log(`👤 User ${userIdStr} joined personal room: ${userRoomId}`);
   });
 
-  // NEW: Leave user's personal room
   socket.on('leaveUserRoom', ({ userId }) => {
     if (!userId) return;
     
@@ -151,7 +146,7 @@ io.on('connection', (socket) => {
     console.log(`👤 User ${userIdStr} left personal room: ${userRoomId}`);
   });
 
-  // FIXED: joinRoom with proper event ordering and status broadcasting
+  // ENHANCED: joinRoom with Owner Phone Number
   socket.on('joinRoom', async ({ roomId, userId }) => {
     console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
 
@@ -164,15 +159,13 @@ io.on('connection', (socket) => {
     const roomIdStr = roomId.toString();
 
     socket.join(roomIdStr);
-    socket.userId = userIdStr; // Store userId on socket for markAsRead
+    socket.userId = userIdStr;
 
-    // Track user's rooms
     if (!userRooms.has(userIdStr)) {
       userRooms.set(userIdStr, new Set());
     }
     userRooms.get(userIdStr).add(roomIdStr);
 
-    // Mark user as ONLINE
     onlineUsers.set(userIdStr, socket.id);
     userSockets.set(socket.id, userIdStr);
 
@@ -181,6 +174,24 @@ io.on('connection', (socket) => {
       if (!chatRoom) {
         socket.emit('error', { message: 'Chat room not found' });
         return;
+      }
+
+      // NEW: Fetch property details to get owner's phone number
+      let ownerPhone = '';
+      if (chatRoom.productId) {
+        try {
+          const property = await Room.findById(chatRoom.productId).select('contactPhone createdBy');
+          console.log(property,"property------------------------");
+          
+          if (property && property.contactPhone) {
+            ownerPhone = property.contactPhone;
+            console.log(`📞 Owner phone number fetched: ${ownerPhone}`);
+          } else {
+            console.log('⚠️ No phone number found for property');
+          }
+        } catch (propertyError) {
+          console.error('❌ Error fetching property phone:', propertyError);
+        }
       }
 
       const userRole = chatRoom.participants[0]._id.toString() === userIdStr 
@@ -212,7 +223,6 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Build online statuses - current user ALWAYS true
       const onlineStatuses = {};
       for (const participant of chatRoom.participants) {
         const participantId = participant._id.toString();
@@ -220,8 +230,9 @@ io.on('connection', (socket) => {
       }
 
       console.log('📊 Sending initial online statuses to client:', onlineStatuses);
+      console.log('📞 Sending owner phone to client:', ownerPhone || 'Not available');
 
-      // ✅ SEND initialData FIRST
+      // ENHANCED: Send initialData with owner phone number
       socket.emit('initialData', {
         messages,
         currentState,
@@ -231,17 +242,16 @@ io.on('connection', (socket) => {
           propertyTitle: chatRoom.name,
           participants: chatRoom.participants
         },
-        onlineStatuses
+        onlineStatuses,
+        ownerPhone // NEW: Include owner's phone number
       });
 
-      // ✅ THEN notify others (after client is ready)
       socket.to(roomIdStr).emit('userJoinedRoom', {
         userId: userIdStr,
         userInfo: chatRoom.participants.find(p => p._id.toString() === userIdStr),
         timestamp: new Date()
       });
 
-      // ✅ Broadcast online status to others AFTER initialData sent
       setTimeout(() => {
         broadcastOnlineStatus(roomIdStr, socket.id);
       }, 100);
@@ -254,7 +264,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ENHANCED HYBRID MESSAGE HANDLER WITH CHAT LIST NOTIFICATIONS
   socket.on('sendMessage', async ({ 
     roomId, 
     sender, 
@@ -278,7 +287,6 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Rate limiting
       const now = Date.now();
       const userMessages = userMessageCounts.get(sender.toString()) || [];
       const recentMessages = userMessages.filter(time => now - time < 60000);
@@ -312,7 +320,6 @@ io.on('connection', (socket) => {
       
       const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
       if (room) {
-        // UPDATE THIS PART - Add unread tracking fields
         const updateData = {
           lastMessage: messageType === 'freetext' ? text : optionText,
           lastMessageSender: sender,
@@ -320,7 +327,6 @@ io.on('connection', (socket) => {
           updatedAt: new Date()
         };
 
-        // NEW: Update readBy array - only mark sender as having read
         updateData.readBy = [sender];
 
         if (room.status === 'pending' && !room.hasMessages) {
@@ -383,16 +389,12 @@ io.on('connection', (socket) => {
         nextState: messageType === 'option' ? nextState : chat.currentState
       };
 
-      // Emit to the specific room
       io.in(roomId).emit('newMessage', broadcastData);
 
-      // NEW: Notify all participants about chat list update
       await notifyParticipantsOfChatUpdate(roomId, sender);
 
-      // FIXED: ALSO EMIT UNREAD STATUS UPDATE TO ALL PARTICIPANTS WITH NULL CHECKS
       const updatedRoom = await ChatRoom.findById(roomId).populate('participants');
       if (updatedRoom) {
-        // Calculate unread status for each participant
         const participantsUnreadStatus = {};
         
         updatedRoom.participants.forEach(participant => {
@@ -402,7 +404,6 @@ io.on('connection', (socket) => {
           participantsUnreadStatus[participant._id.toString()] = isUnread;
         });
 
-        // Emit to all participants in this room
         io.in(roomId).emit('unreadStatusUpdate', {
           roomId: roomId,
           hasUnread: participantsUnreadStatus,
@@ -410,7 +411,6 @@ io.on('connection', (socket) => {
           lastMessageAt: updatedRoom.lastMessageAt
         });
 
-        // Also emit global unread count update
         updatedRoom.participants.forEach(async (participant) => {
           const userRooms = await ChatRoom.find({
             participants: participant._id,
@@ -424,7 +424,6 @@ io.on('connection', (socket) => {
             !room.readBy.includes(participant._id)
           ).length;
 
-          // Send to specific user
           io.to(`user_${participant._id.toString()}`).emit('globalUnreadUpdate', {
             hasUnread: unreadCount > 0,
             unreadCount: unreadCount
@@ -432,7 +431,6 @@ io.on('connection', (socket) => {
         });
       }
 
-      // Push notifications
       if (room && room.participants) {
         for (const participant of room.participants) {
           if (participant._id.toString() === sender.toString()) continue;
@@ -481,7 +479,6 @@ io.on('connection', (socket) => {
     }
   });
   
-  // FIXED: markAsRead socket handler with chat list notification
   socket.on('markAsRead', async (data) => {
     try {
       console.log('📨 markAsRead received:', data);
@@ -517,7 +514,6 @@ io.on('connection', (socket) => {
         await room.save();
         console.log('✅ Room marked as read for user:', userId);
 
-        // NEW: Notify chat list to update
         await notifyParticipantsOfChatUpdate(roomId);
 
         const updatedRoom = await ChatRoom.findById(roomId).populate('participants');
@@ -537,10 +533,8 @@ io.on('connection', (socket) => {
           lastMessageAt: updatedRoom.lastMessageAt
         });
 
-        // Emit messageRead event
         io.in(roomId).emit('messageRead', { roomId, userId });
 
-        // Update global unread count for all participants
         updatedRoom.participants.forEach(async (participant) => {
           const userRooms = await ChatRoom.find({
             participants: participant._id,
@@ -569,7 +563,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // FIXED: getOnlineStatus with validation
   socket.on('getOnlineStatus', async ({ roomId, userId }) => {
     try {
       if (!roomId || !userId) {
@@ -600,7 +593,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // FIXED: deleteMessage with chat list notification
   socket.on('deleteMessage', async ({ roomId, messageIdentifier, userId }) => {
     console.log('🗑️ DELETE MESSAGE REQUEST WITH IDENTIFIER:', {
       roomId: roomId?.toString(),
@@ -685,7 +677,6 @@ io.on('connection', (socket) => {
 
       console.log(`✅ Message deleted successfully. Index: ${messageIndex}`);
 
-      // Update room's last message
       const room = await ChatRoom.findById(roomId);
       if (room) {
         const lastMessage = chat.messages[chat.messages.length - 1];
@@ -705,7 +696,6 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Broadcast deletion to room
       io.in(roomId).emit('messageDeleted', {
         messageId: deletedMessageId,
         roomId,
@@ -713,7 +703,6 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       });
 
-      // NEW: Notify chat list to update
       await notifyParticipantsOfChatUpdate(roomId);
 
     } catch (error) {
@@ -864,7 +853,7 @@ app.get("/api/health", (req, res) => {
     connections: io.engine.clientsCount,
     onlineUsers: onlineUsers.size,
     rateLimitedUsers: userMessageCounts.size,
-    mode: 'enhanced-presence-with-chat-list-updates'
+    mode: 'enhanced-with-owner-phone-support'
   });
 });
 
@@ -874,32 +863,8 @@ process.on('SIGTERM', () => {
   });
 });
 
-import cron from 'node-cron';
-import https from 'https';
-
-const pingMyself = () => {
-  const externalUrl = process.env.RENDER_EXTERNAL_URL || 'https://steya-backend.onrender.com';
-  
-  console.log('🔔 Making external ping to:', `${externalUrl}/api/health`);
-  
-  https.get(`${externalUrl}/api/health`, (res) => {
-    console.log('✅ External ping successful - Status:', res.statusCode);
-  }).on('error', (err) => {
-    console.log('❌ External ping failed:', err.message);
-  });
-};
-
-// Schedule every 5 minutes
-cron.schedule('*/9 * * * *', pingMyself);
-
-// Also ping immediately when server starts
-setTimeout(pingMyself, 10000);
-
-console.log('✅ Self-ping cron job scheduled (every 1 minutes)');
-
-// ✅ THEN YOUR EXISTING server.listen()
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📡 Socket.IO ready for ENHANCED ONLINE PRESENCE + CHAT LIST UPDATES`);
+  console.log(`📡 Socket.IO ready with OWNER PHONE NUMBER SUPPORT`);
   console.log(`🛡️  Rate limiting: ${MESSAGE_RATE_LIMIT} messages/minute`);
 });
