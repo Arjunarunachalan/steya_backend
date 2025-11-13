@@ -59,6 +59,10 @@ const roomSchema = new mongoose.Schema({
   mealsProvided: { type: [String], default: [] },
   amenities: { type: [String], default: [] },
   rules: { type: [String], default: [] },
+  verified: {
+  type: Boolean,
+  default: false,
+},
 
   // ===== Flat/Home Specific =====
   propertyType: { type: String , enum: ['Apartment/Flat', 'Independent House', 'Villa', 'Duplex'] },
