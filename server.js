@@ -147,337 +147,356 @@ io.on('connection', (socket) => {
   });
 
   // ENHANCED: joinRoom with Owner Phone Number
-  socket.on('joinRoom', async ({ roomId, userId }) => {
-    console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
 
-    if (!roomId || !userId) {
-      socket.emit('error', { message: 'Missing roomId or userId' });
+socket.on('sendMessage', async ({ 
+  roomId, 
+  sender, 
+  optionId, 
+  optionText, 
+  text,
+  messageType = 'option',
+  nextState, 
+  senderRole,
+  tempId // ← NEW: For optimistic UI matching
+}) => {
+  console.log(`📤 SEND MESSAGE (${messageType}):`, {
+    room: roomId,
+    sender,
+    type: messageType,
+    content: messageType === 'freetext' ? text : optionText,
+    tempId
+  });
+
+  try {
+    if (!roomId || !sender || !senderRole) {
+      socket.emit('error', { message: 'Missing required fields' });
       return;
     }
 
-    const userIdStr = userId.toString();
-    const roomIdStr = roomId.toString();
-
-    socket.join(roomIdStr);
-    socket.userId = userIdStr;
-
-    if (!userRooms.has(userIdStr)) {
-      userRooms.set(userIdStr, new Set());
+    const now = Date.now();
+    const userMessages = userMessageCounts.get(sender.toString()) || [];
+    const recentMessages = userMessages.filter(time => now - time < 60000);
+    
+    if (recentMessages.length >= MESSAGE_RATE_LIMIT) {
+      socket.emit('error', { message: 'Message rate limit exceeded. Please wait a moment.' });
+      return;
     }
-    userRooms.get(userIdStr).add(roomIdStr);
 
-    onlineUsers.set(userIdStr, socket.id);
-    userSockets.set(socket.id, userIdStr);
+    if (messageType === 'option' && (!optionId || !optionText)) {
+      socket.emit('error', { message: 'Option messages require optionId and optionText' });
+      return;
+    }
 
-    try {
-      const chatRoom = await ChatRoom.findById(roomIdStr).populate('participants', '_id name picture');
-      if (!chatRoom) {
-        socket.emit('error', { message: 'Chat room not found' });
+    if (messageType === 'freetext') {
+      if (!text) {
+        socket.emit('error', { message: 'Freetext messages require text' });
         return;
       }
-
-      // NEW: Fetch property details to get owner's phone number
-      let ownerPhone = '';
-      if (chatRoom.productId) {
-        try {
-          const property = await Room.findById(chatRoom.productId).select('contactPhone createdBy');
-          console.log(property,"property------------------------");
-          
-          if (property && property.contactPhone) {
-            ownerPhone = property.contactPhone;
-            console.log(`📞 Owner phone number fetched: ${ownerPhone}`);
-          } else {
-            console.log('⚠️ No phone number found for property');
-          }
-        } catch (propertyError) {
-          console.error('❌ Error fetching property phone:', propertyError);
-        }
+      if (text.length > 500) {
+        socket.emit('error', { message: 'Message too long (max 500 characters)' });
+        return;
       }
-
-      const userRole = chatRoom.participants[0]._id.toString() === userIdStr 
-        ? 'inquirer' 
-        : 'owner';
-
-      const chat = await Chat.findOne({ roomId: roomIdStr });
-      
-      let currentState = 'START';
-      let messages = [];
-      let conversationMode = 'hybrid';
-
-      if (chat) {
-        conversationMode = chat.conversationMode || 'hybrid';
-        currentState = chat.currentState || 'START';
-        
-        if (chat.messages.length > 0) {
-          messages = chat.messages.map(msg => ({
-            sender: msg.sender,
-            optionId: msg.optionId,
-            option: msg.option,
-            text: msg.text,
-            messageType: msg.messageType || 'option',
-            nextState: msg.nextState,
-            senderRole: msg.senderRole,
-            createdAt: msg.createdAt,
-            fromMe: msg.sender?.toString() === userIdStr
-          }));
-        }
+      if (text.trim().length === 0) {
+        socket.emit('error', { message: 'Message cannot be empty' });
+        return;
       }
-
-      const onlineStatuses = {};
-      for (const participant of chatRoom.participants) {
-        const participantId = participant._id.toString();
-        onlineStatuses[participantId] = onlineUsers.has(participantId);
-      }
-
-      console.log('📊 Sending initial online statuses to client:', onlineStatuses);
-      console.log('📞 Sending owner phone to client:', ownerPhone || 'Not available');
-
-      // ENHANCED: Send initialData with owner phone number
-      socket.emit('initialData', {
-        messages,
-        currentState,
-        userRole,
-        conversationMode,
-        roomInfo: {
-          propertyTitle: chatRoom.name,
-          participants: chatRoom.participants
-        },
-        onlineStatuses,
-        ownerPhone // NEW: Include owner's phone number
-      });
-
-      socket.to(roomIdStr).emit('userJoinedRoom', {
-        userId: userIdStr,
-        userInfo: chatRoom.participants.find(p => p._id.toString() === userIdStr),
-        timestamp: new Date()
-      });
-
-      setTimeout(() => {
-        broadcastOnlineStatus(roomIdStr, socket.id);
-      }, 100);
-
-      console.log(`📢 User ${userIdStr} joined room ${roomIdStr}. Online status: true`);
-
-    } catch (error) {
-      console.error('❌ Error joining room:', error);
-      socket.emit('error', { message: 'Failed to join room', error: error.message });
     }
-  });
 
-  socket.on('sendMessage', async ({ 
-    roomId, 
-    sender, 
-    optionId, 
-    optionText, 
-    text,
-    messageType = 'option',
-    nextState, 
-    senderRole 
-  }) => {
-    console.log(`📤 SEND MESSAGE (${messageType}):`, {
-      room: roomId,
+    const senderUser = await User.findById(sender).select('name picture');
+    
+    const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
+    if (room) {
+      const updateData = {
+        lastMessage: messageType === 'freetext' ? text : optionText,
+        lastMessageSender: sender,
+        lastMessageAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      updateData.readBy = [sender];
+
+      if (room.status === 'pending' && !room.hasMessages) {
+        updateData.status = 'active';
+        updateData.hasMessages = true;
+        updateData.firstMessageAt = new Date();
+      }
+
+      await ChatRoom.findByIdAndUpdate(roomId, updateData);
+    }
+
+    let chat = await Chat.findOne({ roomId });
+    if (!chat) {
+      chat = new Chat({ 
+        roomId, 
+        messages: [],
+        conversationMode: 'hybrid',
+        currentState: nextState || 'START'
+      });
+    }
+
+    const newMessage = {
       sender,
-      type: messageType,
-      content: messageType === 'freetext' ? text : optionText
-    });
+      messageType,
+      senderRole,
+      createdAt: new Date()
+    };
 
-    try {
-      if (!roomId || !sender || !senderRole) {
-        socket.emit('error', { message: 'Missing required fields' });
-        return;
-      }
+    if (messageType === 'option') {
+      newMessage.optionId = optionId;
+      newMessage.option = optionText;
+      newMessage.nextState = nextState;
+    } else if (messageType === 'freetext') {
+      newMessage.text = text;
+      newMessage.nextState = chat.currentState;
+    }
 
-      const now = Date.now();
-      const userMessages = userMessageCounts.get(sender.toString()) || [];
-      const recentMessages = userMessages.filter(time => now - time < 60000);
-      
-      if (recentMessages.length >= MESSAGE_RATE_LIMIT) {
-        socket.emit('error', { message: 'Message rate limit exceeded. Please wait a moment.' });
-        return;
-      }
+    chat.messages.push(newMessage);
+    
+    if (nextState && messageType === 'option') {
+      chat.currentState = nextState;
+    }
+    
+    await chat.save();
 
-      if (messageType === 'option' && (!optionId || !optionText)) {
-        socket.emit('error', { message: 'Option messages require optionId and optionText' });
-        return;
-      }
+    recentMessages.push(now);
+    userMessageCounts.set(sender.toString(), recentMessages);
 
-      if (messageType === 'freetext') {
-        if (!text) {
-          socket.emit('error', { message: 'Freetext messages require text' });
-          return;
-        }
-        if (text.length > 500) {
-          socket.emit('error', { message: 'Message too long (max 500 characters)' });
-          return;
-        }
-        if (text.trim().length === 0) {
-          socket.emit('error', { message: 'Message cannot be empty' });
-          return;
-        }
-      }
+    // ✅ IMPROVED: Send response immediately with tempId
+const broadcastData = {
+  message: {
+    _id: newMessage._id, // ← ADD THIS if you have it
+    sender: newMessage.sender,
+    optionId: newMessage.optionId,
+    option: newMessage.option,
+    text: newMessage.text,
+    messageType: newMessage.messageType,
+    nextState: newMessage.nextState,
+    senderRole: newMessage.senderRole,
+    createdAt: newMessage.createdAt
+  },
+  nextState: messageType === 'option' ? nextState : chat.currentState,
+  tempId // ← Make sure this is included
+};
 
-      const senderUser = await User.findById(sender).select('name picture');
-      
-      const room = await ChatRoom.findById(roomId).populate('participants', '_id name expoPushToken notificationSettings');
-      if (room) {
-        const updateData = {
-          lastMessage: messageType === 'freetext' ? text : optionText,
-          lastMessageSender: sender,
-          lastMessageAt: new Date(),
-          updatedAt: new Date()
-        };
+// ✅ Broadcast to EVERYONE in the room
+io.in(roomId).emit('newMessage', broadcastData);
+console.log(`📢 Broadcasted message to room ${roomId}`, broadcastData);
 
-        updateData.readBy = [sender];
+    await notifyParticipantsOfChatUpdate(roomId, sender);
 
-        if (room.status === 'pending' && !room.hasMessages) {
-          updateData.status = 'active';
-          updateData.hasMessages = true;
-          updateData.firstMessageAt = new Date();
-        }
-
-        await ChatRoom.findByIdAndUpdate(roomId, updateData);
-      }
-
-      let chat = await Chat.findOne({ roomId });
-      if (!chat) {
-        chat = new Chat({ 
-          roomId, 
-          messages: [],
-          conversationMode: 'hybrid',
-          currentState: nextState || 'START'
-        });
-      }
-
-      const newMessage = {
-        sender,
-        messageType,
-        senderRole,
-        createdAt: new Date()
-      };
-
-      if (messageType === 'option') {
-        newMessage.optionId = optionId;
-        newMessage.option = optionText;
-        newMessage.nextState = nextState;
-      } else if (messageType === 'freetext') {
-        newMessage.text = text;
-        newMessage.nextState = chat.currentState;
-      }
-
-      chat.messages.push(newMessage);
-      
-      if (nextState && messageType === 'option') {
-        chat.currentState = nextState;
-      }
-      
-      await chat.save();
-
-      recentMessages.push(now);
-      userMessageCounts.set(sender.toString(), recentMessages);
-
-      const broadcastData = {
-        message: {
-          sender: newMessage.sender,
-          optionId: newMessage.optionId,
-          option: newMessage.option,
-          text: newMessage.text,
-          messageType: newMessage.messageType,
-          nextState: newMessage.nextState,
-          senderRole: newMessage.senderRole,
-          createdAt: newMessage.createdAt
-        },
-        nextState: messageType === 'option' ? nextState : chat.currentState
-      };
-
-      io.in(roomId).emit('newMessage', broadcastData);
-
-      await notifyParticipantsOfChatUpdate(roomId, sender);
-
-      const updatedRoom = await ChatRoom.findById(roomId).populate('participants');
-      if (updatedRoom) {
-        const participantsUnreadStatus = {};
-        
-        updatedRoom.participants.forEach(participant => {
-          const isUnread = updatedRoom.lastMessageSender && 
-                          updatedRoom.lastMessageSender.toString() !== participant._id.toString() && 
-                          !updatedRoom.readBy.includes(participant._id);
-          participantsUnreadStatus[participant._id.toString()] = isUnread;
-        });
-
-        io.in(roomId).emit('unreadStatusUpdate', {
-          roomId: roomId,
-          hasUnread: participantsUnreadStatus,
-          lastMessage: updatedRoom.lastMessage,
-          lastMessageAt: updatedRoom.lastMessageAt
-        });
-
-        updatedRoom.participants.forEach(async (participant) => {
-          const userRooms = await ChatRoom.find({
-            participants: participant._id,
-            status: 'active',
-            hasMessages: true
-          });
+    // ✅ OPTIMIZED: Do heavy work AFTER responding to client
+    setImmediate(async () => {
+      try {
+        const updatedRoom = await ChatRoom.findById(roomId).populate('participants');
+        if (updatedRoom) {
+          const participantsUnreadStatus = {};
           
-          const unreadCount = userRooms.filter(room => 
-            room.lastMessageSender && 
-            room.lastMessageSender.toString() !== participant._id.toString() && 
-            !room.readBy.includes(participant._id)
-          ).length;
-
-          io.to(`user_${participant._id.toString()}`).emit('globalUnreadUpdate', {
-            hasUnread: unreadCount > 0,
-            unreadCount: unreadCount
+          updatedRoom.participants.forEach(participant => {
+            const isUnread = updatedRoom.lastMessageSender && 
+                            updatedRoom.lastMessageSender.toString() !== participant._id.toString() && 
+                            !updatedRoom.readBy.includes(participant._id);
+            participantsUnreadStatus[participant._id.toString()] = isUnread;
           });
-        });
-      }
 
-      if (room && room.participants) {
-        for (const participant of room.participants) {
-          if (participant._id.toString() === sender.toString()) continue;
-          
-          const recipientSocketId = onlineUsers.get(participant._id.toString());
-          const isRecipientInRoom = recipientSocketId && io.sockets.adapter.rooms.get(roomId)?.has(recipientSocketId);
+          io.in(roomId).emit('unreadStatusUpdate', {
+            roomId: roomId,
+            hasUnread: participantsUnreadStatus,
+            lastMessage: updatedRoom.lastMessage,
+            lastMessageAt: updatedRoom.lastMessageAt
+          });
 
-          if (!isRecipientInRoom && participant.expoPushToken) {
-            const notifEnabled = participant.notificationSettings?.enabled !== false;
-            const chatNotifEnabled = participant.notificationSettings?.chatMessages !== false;
+          updatedRoom.participants.forEach(async (participant) => {
+            const userRooms = await ChatRoom.find({
+              participants: participant._id,
+              status: 'active',
+              hasMessages: true
+            });
+            
+            const unreadCount = userRooms.filter(room => 
+              room.lastMessageSender && 
+              room.lastMessageSender.toString() !== participant._id.toString() && 
+              !room.readBy.includes(participant._id)
+            ).length;
 
-            if (notifEnabled && chatNotifEnabled) {
-              try {
-                const messageContent = messageType === 'freetext' ? text : optionText;
-                
-                await sendPushNotification(participant.expoPushToken, {
-                  senderName: senderUser ? `${senderUser.name}` : 'New Message',
-                  message: messageContent.length > 100 
-                    ? messageContent.substring(0, 100) + '...' 
-                    : messageContent,
-                  senderAvatar: senderUser?.picture,
-                  chatId: roomId.toString(),
-                  userId: sender.toString(),
-                  badge: 1,
-                  additionalData: {
-                    type: 'chat_message',
-                    roomId: roomId.toString(),
-                    senderId: sender.toString(),
-                    senderName: senderUser?.name || 'Unknown User',
-                    screen: 'ChatScreen',
-                    productTitle: room.name,
-                    messageType: messageType
-                  }
-                });
-              } catch (pushError) {
-                console.error('❌ Push notification failed:', pushError);
+            io.to(`user_${participant._id.toString()}`).emit('globalUnreadUpdate', {
+              hasUnread: unreadCount > 0,
+              unreadCount: unreadCount
+            });
+          });
+        }
+
+        // ✅ PUSH NOTIFICATIONS (Don't block response waiting for these)
+        if (room && room.participants) {
+          for (const participant of room.participants) {
+            if (participant._id.toString() === sender.toString()) continue;
+            
+            const recipientSocketId = onlineUsers.get(participant._id.toString());
+            const isRecipientInRoom = recipientSocketId && io.sockets.adapter.rooms.get(roomId)?.has(recipientSocketId);
+
+            if (!isRecipientInRoom && participant.expoPushToken) {
+              const notifEnabled = participant.notificationSettings?.enabled !== false;
+              const chatNotifEnabled = participant.notificationSettings?.chatMessages !== false;
+
+              if (notifEnabled && chatNotifEnabled) {
+                try {
+                  const messageContent = messageType === 'freetext' ? text : optionText;
+                  
+                  await sendPushNotification(participant.expoPushToken, {
+                    senderName: senderUser ? `${senderUser.name}` : 'New Message',
+                    message: messageContent.length > 100 
+                      ? messageContent.substring(0, 100) + '...' 
+                      : messageContent,
+                    senderAvatar: senderUser?.picture,
+                    chatId: roomId.toString(),
+                    userId: sender.toString(),
+                    badge: 1,
+                    additionalData: {
+                      type: 'chat_message',
+                      roomId: roomId.toString(),
+                      senderId: sender.toString(),
+                      senderName: senderUser?.name || 'Unknown User',
+                      screen: 'ChatScreen',
+                      productTitle: room.name,
+                      messageType: messageType
+                    }
+                  });
+                } catch (pushError) {
+                  console.error('❌ Push notification failed:', pushError);
+                }
               }
             }
           }
         }
+      } catch (asyncError) {
+        console.error('❌ Error in async post-message processing:', asyncError);
       }
+    });
 
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      socket.emit('error', { message: 'Failed to send message', error: error.message });
+  } catch (error) {
+    console.error('❌ Error sending message:', error);
+    socket.emit('error', { message: 'Failed to send message', error: error.message });
+  }
+});
+
+
+// ✅ CHANGE 2: Optimize joinRoom (around line 200)
+// FIND the socket.on('joinRoom', ...) block and UPDATE the property phone fetch part:
+
+socket.on('joinRoom', async ({ roomId, userId }) => {
+  console.log(`🎯 JOIN ROOM: User ${userId} → Room ${roomId}`);
+
+  if (!roomId || !userId) {
+    socket.emit('error', { message: 'Missing roomId or userId' });
+    return;
+  }
+
+  const userIdStr = userId.toString();
+  const roomIdStr = roomId.toString();
+
+  socket.join(roomIdStr);
+  socket.userId = userIdStr;
+
+  if (!userRooms.has(userIdStr)) {
+    userRooms.set(userIdStr, new Set());
+  }
+  userRooms.get(userIdStr).add(roomIdStr);
+
+  onlineUsers.set(userIdStr, socket.id);
+  userSockets.set(socket.id, userIdStr);
+
+  try {
+    // ✅ OPTIMIZED: Use Promise.all for parallel queries
+    const [chatRoom, chat] = await Promise.all([
+      ChatRoom.findById(roomIdStr)
+        .populate('participants', '_id name picture')
+        .lean(), // ← Faster: plain objects
+      Chat.findOne({ roomId: roomIdStr }).lean()
+    ]);
+
+    if (!chatRoom) {
+      socket.emit('error', { message: 'Chat room not found' });
+      return;
     }
-  });
+
+    const userRole = chatRoom.participants[0]._id.toString() === userIdStr 
+      ? 'inquirer' 
+      : 'owner';
+
+    let currentState = 'START';
+    let messages = [];
+    let conversationMode = 'hybrid';
+
+    if (chat) {
+      conversationMode = chat.conversationMode || 'hybrid';
+      currentState = chat.currentState || 'START';
+      
+      if (chat.messages.length > 0) {
+        messages = chat.messages.map(msg => ({
+          sender: msg.sender,
+          optionId: msg.optionId,
+          option: msg.option,
+          text: msg.text,
+          messageType: msg.messageType || 'option',
+          nextState: msg.nextState,
+          senderRole: msg.senderRole,
+          createdAt: msg.createdAt,
+          fromMe: msg.sender?.toString() === userIdStr
+        }));
+      }
+    }
+
+    const onlineStatuses = {};
+    for (const participant of chatRoom.participants) {
+      const participantId = participant._id.toString();
+      onlineStatuses[participantId] = onlineUsers.has(participantId);
+    }
+
+    // ✅ OPTIMIZED: Send main data immediately WITHOUT waiting for phone
+    socket.emit('initialData', {
+      messages,
+      currentState,
+      userRole,
+      conversationMode,
+      roomInfo: {
+        propertyTitle: chatRoom.name,
+        participants: chatRoom.participants
+      },
+      onlineStatuses,
+      ownerPhone: '' // Will be sent separately
+    });
+
+    // ✅ OPTIMIZED: Fetch phone number separately (don't block main response)
+    if (chatRoom.productId) {
+      Room.findById(chatRoom.productId)
+        .select('contactPhone')
+        .lean()
+        .then(property => {
+          if (property?.contactPhone) {
+            console.log(`📞 Sending owner phone: ${property.contactPhone}`);
+            socket.emit('ownerPhoneUpdate', { ownerPhone: property.contactPhone });
+          }
+        })
+        .catch(err => console.error('❌ Phone fetch error:', err));
+    }
+
+    socket.to(roomIdStr).emit('userJoinedRoom', {
+      userId: userIdStr,
+      userInfo: chatRoom.participants.find(p => p._id.toString() === userIdStr),
+      timestamp: new Date()
+    });
+
+    setTimeout(() => {
+      broadcastOnlineStatus(roomIdStr, socket.id);
+    }, 100);
+
+    console.log(`📢 User ${userIdStr} joined room ${roomIdStr}. Online status: true`);
+
+  } catch (error) {
+    console.error('❌ Error joining room:', error);
+    socket.emit('error', { message: 'Failed to join room', error: error.message });
+  }
+});
+
   
   socket.on('markAsRead', async (data) => {
     try {
