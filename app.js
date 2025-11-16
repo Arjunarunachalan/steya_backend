@@ -14,6 +14,7 @@ import myPostsRoutes from './routes/myPosts.js';
 import donationRoutes from './routes/donationRoutes.js';
 import bugRoutes from './routes/bugRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
+import userupdate from './routes/userupdate.js';
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -37,6 +38,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoute); // No limiter - Google handles it
 app.use('/api', userRoutes);
+app.use('/api', userupdate);
 app.use('/api/payment', paymentRoutes);
 app.use("/api",  roomRoutes);
 app.use('/api/chat', chatRoomRoutes); // Stricter for chat

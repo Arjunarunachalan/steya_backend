@@ -1,4 +1,4 @@
-// models/chatmodal.js - HYBRID VERSION
+// models/chatmodal.js - SIMPLE VERSION (sent/seen only)
 import mongoose from 'mongoose';
 
 const chatSchema = new mongoose.Schema({
@@ -15,7 +15,6 @@ const chatSchema = new mongoose.Schema({
         ref: 'User',
         required: true
       },
-      // For option-based messages
       optionId: {
         type: String,
         default: null
@@ -33,7 +32,6 @@ const chatSchema = new mongoose.Schema({
         enum: ['inquirer', 'owner'],
         required: true
       },
-      // For free-text messages
       messageType: {
         type: String,
         enum: ['option', 'freetext'],
@@ -43,7 +41,6 @@ const chatSchema = new mongoose.Schema({
         type: String,
         default: null
       },
-      // Optional: For media attachments
       attachments: [{
         type: {
           type: String,
@@ -52,10 +49,10 @@ const chatSchema = new mongoose.Schema({
         url: String,
         filename: String
       }],
-      // Message status
+      // ✅ SIMPLE STATUS: only 'sent' or 'seen'
       status: {
         type: String,
-        enum: ['sent', 'delivered', 'read'],
+        enum: ['sent', 'seen'],
         default: 'sent'
       },
       createdAt: {
@@ -65,7 +62,6 @@ const chatSchema = new mongoose.Schema({
       }
     }
   ],
-  // Track conversation mode
   conversationMode: {
     type: String,
     enum: ['guided', 'freetext', 'hybrid'],
