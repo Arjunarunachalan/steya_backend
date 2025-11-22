@@ -1112,6 +1112,9 @@ export const getMyFavorites = async (req, res) => {
 
 // ✅ CHECK IF ROOM IS FAVORITED
 export const checkFavorite = async (req, res) => {
+  console.log("fghjjjjjjjjjjjjj--------");
+  
+
   try {
     const { roomId } = req.params;
     const userId = req.user._id;

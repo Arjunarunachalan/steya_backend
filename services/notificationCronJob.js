@@ -15,7 +15,7 @@ import {
 export function startNotificationJobs() {
   
   // ✅ JOB 1: Check for posts expiring in 3 days (Run daily at 9 AM)
-  cron.schedule('35 13 * * *', async () => {
+  cron.schedule('0 9 * * *', async () => {
  
     console.log('🔔 Checking for posts expiring in 3 days...');
 
