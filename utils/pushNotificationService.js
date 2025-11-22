@@ -111,8 +111,120 @@ export const checkPushNotificationReceipts = async (receiptIds) => {
   }
 };
 
+// ADD THESE NEW FUNCTIONS to your existing pushNotificationService.js
+
+/**
+ * Send expiry warning push notification (3 days before)
+ */
+export const sendExpiryWarningPush = async (pushToken, post, daysLeft) => {
+  try {
+    if (!Expo.isExpoPushToken(pushToken)) {
+      console.error(`❌ Invalid Expo push token: ${pushToken}`);
+      return { success: false, error: 'Invalid push token' };
+    }
+    
+    const message = {
+      to: pushToken,
+      sound: 'default',
+      title: `⚠️ Reminder: Your property expires in ${daysLeft} days`,  
+      body: `Your property "${post.title}" will expire soon. Tap to renew.`,  
+      data: {
+        type: 'expiry_warning',
+        postId: post._id.toString(),
+        daysLeft,
+        screen: 'MyAds',
+      },
+      badge: 1,
+      priority: 'high',
+      channelId: 'property-alerts',
+    };
+    
+    const ticketChunk = await expo.sendPushNotificationsAsync([message]);
+    console.log('✅ Expiry warning push sent');
+    return { success: true, ticket: ticketChunk[0] };
+  } catch (error) {
+    console.error('❌ Error sending expiry warning push:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send post expired push notification
+ */
+export const sendPostExpiredPush = async (pushToken, post) => {
+  try {
+    if (!Expo.isExpoPushToken(pushToken)) {
+      return { success: false, error: 'Invalid push token' };
+    }
+    
+    const message = {
+      to: pushToken,
+      sound: 'default',
+     title: `❌ Your listing has expired — action needed`,
+
+      body: `"${post.title}" has expired. Renew within 30 days to avoid automatic deletion.`,
+
+      data: {
+        type: 'post_expired',
+        postId: post._id.toString(),
+        screen: 'MyAds',
+      },
+      badge: 1,
+      priority: 'high',
+      channelId: 'property-alerts',
+    };
+    
+    const ticketChunk = await expo.sendPushNotificationsAsync([message]);
+    console.log('✅ Post expired push sent');
+    return { success: true, ticket: ticketChunk[0] };
+  } catch (error) {
+    console.error('❌ Error sending post expired push:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send final deletion warning push (3 days before deletion)
+ */
+export const sendFinalDeletionWarningPush = async (pushToken, post, daysLeft) => {
+  try {
+    if (!Expo.isExpoPushToken(pushToken)) {
+      return { success: false, error: 'Invalid push token' };
+    }
+    
+    const message = {
+      to: pushToken,
+      sound: 'default',
+title:`🚨 Your listing will be deleted in ${daysLeft} days!`,
+body: `"${post.title}" will be deleted soon. Renew it to keep it visible.`,
+
+
+      data: {
+        type: 'final_deletion_warning',
+        postId: post._id.toString(),
+        daysLeft,
+        screen: 'MyAds',
+      },
+      badge: 1,
+      priority: 'high',
+      channelId: 'urgent-alerts',
+    };
+    
+    const ticketChunk = await expo.sendPushNotificationsAsync([message]);
+    console.log('✅ Final deletion warning push sent');
+    return { success: true, ticket: ticketChunk[0] };
+  } catch (error) {
+    console.error('❌ Error sending final deletion push:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Export the new functions
 export default {
   sendPushNotification,
   sendBatchPushNotifications,
-  checkPushNotificationReceipts
+  checkPushNotificationReceipts,
+  sendExpiryWarningPush,
+  sendPostExpiredPush,
+  sendFinalDeletionWarningPush,
 };

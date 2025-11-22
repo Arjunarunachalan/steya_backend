@@ -15,6 +15,7 @@ import donationRoutes from './routes/donationRoutes.js';
 import bugRoutes from './routes/bugRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import userupdate from './routes/userupdate.js';
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -47,5 +48,6 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/posts',  myPostsRoutes);
 app.use('/api',  donationRoutes);
 app.use('/api/bug', bugRoutes);
+
 
 export default app;
