@@ -172,7 +172,7 @@ router.get('/app-version', (req, res) => {
   console.log(`📱 App checking version: ${currentVersion}`);
   
   // ✅ UPDATE THIS when you release new version!
-  const LATEST_VERSION = '1.0.4'; // ← Change to 1.0.2 when releasing
+  const LATEST_VERSION = '1.0.5'; // ← Change to 1.0.2 when releasing
   
   const needsUpdate = currentVersion < LATEST_VERSION;
   
