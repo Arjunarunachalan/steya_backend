@@ -664,11 +664,12 @@ export const getRooms = async (req, res) => {
             { isActive: true }
           ]
         },
-        // Not expired
+        // Not expired (SKIP expiry check for PG/Hostel)
         {
           $or: [
             { expiryDate: { $exists: false } },
-            { expiryDate: { $gt: new Date() } }
+            { expiryDate: { $gt: new Date() } },
+            { category: 'pg_hostel' } // PG/Hostel posts never expire
           ]
         }
       ]

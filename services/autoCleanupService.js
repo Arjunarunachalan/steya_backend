@@ -105,15 +105,18 @@ export class AutoCleanupService {
       });
 
       // ✅ SCENARIO 1 & 2: Find posts that need to be deleted
+      // ⚠️ SKIP PG/HOSTEL CATEGORY - no expiry for pg_hostel
       const postsToDelete = await Room.find({
         $or: [
           // SCENARIO 1: Posts that expired naturally and user didn't renew within 30 days
-          { 
+          // EXCLUDE pg_hostel category from expiry
+          {
             expiryDate: { $lt: thirtyDaysAgo },
-            isDeleted: false
+            isDeleted: false,
+            category: { $ne: 'pg_hostel' }
           },
           // SCENARIO 2: Posts manually deleted by user (soft delete) - delete after 3 days
-          { 
+          {
             isDeleted: true,
             deleteExpiresAt: { $lte: now }
           }
@@ -248,7 +251,8 @@ export class AutoCleanupService {
 
     const expiredPostsNaturally = await Room.countDocuments({
       expiryDate: { $lt: thirtyDaysAgo },
-      isDeleted: false
+      isDeleted: false,
+      category: { $ne: 'pg_hostel' } // Exclude PG/Hostel from expiry
     });
 
     const deletedPostsReady = await Room.countDocuments({
@@ -262,20 +266,22 @@ export class AutoCleanupService {
     });
 
     const expiringSoon = await Room.countDocuments({
-      expiryDate: { 
+      expiryDate: {
         $gte: now,
         $lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
       },
       isDeleted: false,
-      isActive: true
+      isActive: true,
+      category: { $ne: 'pg_hostel' } // Exclude PG/Hostel from expiry
     });
 
     const inGracePeriod = await Room.countDocuments({
-      expiryDate: { 
+      expiryDate: {
         $lt: now,
         $gte: thirtyDaysAgo
       },
-      isDeleted: false
+      isDeleted: false,
+      category: { $ne: 'pg_hostel' } // Exclude PG/Hostel from expiry
     });
 
     return {

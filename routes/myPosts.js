@@ -97,13 +97,15 @@ router.get('/my-posts-stats', authMiddleware, async (req, res) => {
     });
 
     // Calculate expiring soon (within 7 days)
+    // ⚠️ EXCLUDE PG/HOSTEL CATEGORY - no expiry for pg_hostel
     const sevenDaysFromNow = new Date();
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
-    
+
     const expiringSoon = await Room.countDocuments({
       createdBy: userId,
       isActive: true,
-      expiryDate: { 
+      category: { $ne: 'pg_hostel' }, // Exclude PG/Hostel from expiry
+      expiryDate: {
         $lte: sevenDaysFromNow,
         $gte: new Date()
       }
@@ -179,6 +181,7 @@ router.patch('/my-posts/:postId/toggle-status', authMiddleware, async (req, res)
 
 
 // ✅ RENEW post (extend expiry date)
+// ⚠️ PG/HOSTEL CATEGORY cannot be renewed (no expiry)
 router.patch('/my-posts/:postId/renew', authMiddleware, async (req, res) => {
   try {
     const { postId } = req.params;
@@ -196,10 +199,18 @@ router.patch('/my-posts/:postId/renew', authMiddleware, async (req, res) => {
       });
     }
 
+    // ⚠️ PREVENT RENEWAL OF PG/HOSTEL POSTS
+    if (post.category === 'pg_hostel') {
+      return res.status(400).json({
+        success: false,
+        message: 'PG/Hostel posts do not have expiry and cannot be renewed'
+      });
+    }
+
     // Extend by 30 days from now
     const newExpiryDate = new Date();
     newExpiryDate.setDate(newExpiryDate.getDate() + 30);
-    
+
     post.expiryDate = newExpiryDate;
     post.isActive = true; // Ensure it's active after renewal
     await post.save();
