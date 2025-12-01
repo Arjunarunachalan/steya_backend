@@ -344,6 +344,67 @@ export class AutoCleanupService {
       session.endSession();
     }
   }
+
+  // 🔄 AUTO-RENEW POSTS (Temporary - for platform growth)
+  // ⚠️ REMOVE THIS FUNCTION ONCE PLATFORM HAS ENOUGH ACTIVE USERS
+  // Logic: When posts have 10 days left, extend by 30 more days
+  async autoRenewExpiredPosts() {
+    try {
+      const now = new Date();
+      const tenDaysFromNow = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+
+      console.log('🔄 Starting auto-renewal for posts with 10 days left...', {
+        now: now.toISOString(),
+        tenDaysFromNow: tenDaysFromNow.toISOString()
+      });
+
+      // Find posts that will expire in the next 10 days
+      const postsToRenew = await Room.find({
+        expiryDate: {
+          $gt: now, // Not expired yet
+          $lte: tenDaysFromNow // But will expire within 10 days
+        },
+        isDeleted: false, // Not manually deleted
+        isActive: true, // Still active
+        category: { $ne: 'pg_hostel' } // Exclude PG/Hostel (they don't expire anyway)
+      });
+
+      console.log(`📝 Found ${postsToRenew.length} posts with 10 days or less remaining`);
+
+      let renewedCount = 0;
+
+      for (const post of postsToRenew) {
+        try {
+          // Extend by 30 days from current expiry date
+          const currentExpiry = new Date(post.expiryDate);
+          const newExpiryDate = new Date(currentExpiry.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+          post.expiryDate = newExpiryDate;
+          await post.save();
+          renewedCount++;
+
+          const daysRemaining = Math.ceil((currentExpiry - now) / (1000 * 60 * 60 * 24));
+          console.log(`✅ Auto-renewed: ${post.title} (had ${daysRemaining} days left, added 30 more)`);
+        } catch (error) {
+          console.error(`❌ Failed to renew post ${post._id}:`, error);
+        }
+      }
+
+      const result = {
+        totalFound: postsToRenew.length,
+        renewed: renewedCount,
+        failed: postsToRenew.length - renewedCount,
+        timestamp: new Date().toISOString()
+      };
+
+      console.log('🎉 Auto-renewal completed:', result);
+      return result;
+
+    } catch (error) {
+      console.error('❌ Error in auto-renewal service:', error);
+      throw error;
+    }
+  }
 }
 
 export default new AutoCleanupService();    
